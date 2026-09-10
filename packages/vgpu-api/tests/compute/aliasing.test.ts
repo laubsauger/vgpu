@@ -101,6 +101,35 @@ describe("compute(gpu) / storage(gpu) free functions", () => {
     expect(buffers.read).not.toBe(buffers.write);
   });
 
+  test("disjoint regions of one GPUBuffer are not aliasing: a packed arena reads one range and writes another", async () => {
+    gpu = await init();
+    const sim = compute(gpu, ALIASING_SHADER, { label: "sim" });
+    const arena = gpu.device.createBuffer({ size: 64, usage: ["storage", "copy_dst"] }).gpu;
+    sim.set({ src: { buffer: arena, offset: 0, size: 32 }, dst: { buffer: arena, offset: 32, size: 32 } });
+    expect(() => sim.dispatch(1)).not.toThrow();
+  });
+
+  test("overlapping regions of one GPUBuffer alias when either side writes", async () => {
+    gpu = await init();
+    const sim = compute(gpu, ALIASING_SHADER, { label: "sim" });
+    const arena = gpu.device.createBuffer({ size: 64, usage: ["storage", "copy_dst"] }).gpu;
+    // [0, 48) and [32, 64) share 16 bytes; dst is read_write.
+    sim.set({ src: { buffer: arena, offset: 0, size: 48 }, dst: { buffer: arena, offset: 32, size: 32 } });
+    expect(() => sim.dispatch(1)).toThrowError("`src` and writable `dst` alias. Fix: alternate them with pingPongStorage(gpu).");
+    // A region without an explicit size runs to the end of the buffer and overlaps the same way.
+    sim.set({ src: { buffer: arena, offset: 0, size: 16 }, dst: { buffer: arena, offset: 8 } });
+    expect(() => sim.dispatch(1)).toThrowError("`src` and writable `dst` alias. Fix: alternate them with pingPongStorage(gpu).");
+  });
+
+  test("overlapping read-only regions of one GPUBuffer pass", async () => {
+    gpu = await init();
+    const sim = compute(gpu, READ_ONLY_SHADER, { label: "sim" });
+    const arena = gpu.device.createBuffer({ size: 64, usage: ["storage", "copy_dst"] }).gpu;
+    const dst = storage(gpu, 32);
+    sim.set({ a: { buffer: arena, offset: 0, size: 32 }, b: { buffer: arena, offset: 16, size: 32 }, dst });
+    expect(() => sim.dispatch(1)).not.toThrow();
+  });
+
   test("compute(gpu) shares the gpu's single bind group cache with the facade path", async () => {
     gpu = await init();
     const shared = storage(gpu, 16);

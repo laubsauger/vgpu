@@ -2,7 +2,7 @@ import type { Device } from "@vgpu/core";
 import type { ShaderSource } from "@vgpu/wgsl";
 import { reflectSource, type BindingInfo, type EntryPointInfo, type Reflection } from "@vgpu/wgsl/reflect-source";
 import { entryMetadata } from "./entry-metadata.ts";
-import { createBindGroupCache, identityKey, type BindGroupCache, type BindGroupIdentityPart } from "./bind-cache.ts";
+import { createBindGroupCache, type BindGroupCache } from "./bind-cache.ts";
 import { createSetCore, bindGroupLayoutsForReflection, pipelineLayoutFor, type SetBag, type SetCore } from "./set-core.ts";
 import { visibilityForEntries } from "./set-layouts.ts";
 import type { Compute, ComputeOptions, DispatchOptions } from "./api-types.ts";
@@ -105,22 +105,39 @@ export class ComputePipeline implements Compute {
     return resolveIndirect(this.label, where, opts.indirect, "dispatchWorkgroupsIndirect");
   }
 
+  /**
+   * Storage aliasing is a range question, not a buffer question: two bindings alias when their byte ranges of one
+   * GPUBuffer overlap and at least one of them is writable. Disjoint regions of one buffer (a packed attribute
+   * buffer, a sub-allocated arena) are legitimate and pass.
+   */
   #preflightAliasing(): void {
     if (!this.#storageBindings.length) return;
-    const buckets = new Map<string, { identity: BindGroupIdentityPart; writable: boolean }[]>();
+    const buckets = new Map<GPUBuffer, { start: number; end: number; writable: boolean }[]>();
     for (const binding of this.#storageBindings) {
       const state = this.setCore.bindingState(binding.name);
       if (!state) continue;
-      const key = identityKey(state.identity);
-      if (!buckets.has(key)) buckets.set(key, []);
-      buckets.get(key)!.push({ identity: state.identity, writable: binding.access !== "read" });
+      const range = bufferRange(state.resource);
+      if (!range) continue;
+      if (!buckets.has(range.buffer)) buckets.set(range.buffer, []);
+      buckets.get(range.buffer)!.push({ start: range.start, end: range.end, writable: binding.access !== "read" });
     }
     for (const bucket of buckets.values()) {
-      if (bucket.length < 2) continue;
-      if (!bucket.some((entry) => entry.writable)) continue;
-      throw writableStorageAliasingError(`${this.label}.dispatch`);
+      for (let i = 0; i < bucket.length; i++) {
+        for (let j = i + 1; j < bucket.length; j++) {
+          const a = bucket[i]!;
+          const b = bucket[j]!;
+          if (!a.writable && !b.writable) continue;
+          if (a.start < b.end && b.start < a.end) throw writableStorageAliasingError(`${this.label}.dispatch`);
+        }
+      }
     }
   }
+}
+
+function bufferRange(resource: GPUBindingResource): { readonly buffer: GPUBuffer; readonly start: number; readonly end: number } | undefined {
+  if (typeof resource !== "object" || resource === null || !("buffer" in resource)) return undefined;
+  const { buffer, offset = 0, size } = resource as GPUBufferBinding;
+  return { buffer, start: offset, end: offset + (size ?? buffer.size - offset) };
 }
 
 function computeEntryPoint(reflection: Reflection, label: string, name?: string): EntryPointInfo {

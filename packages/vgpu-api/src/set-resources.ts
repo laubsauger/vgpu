@@ -1,6 +1,6 @@
 import { Buffer, Texture, type ResourceIdentity, type UnsubscribeResourceDestroy } from "@vgpu/core";
 import type { BindingInfo } from "@vgpu/wgsl/reflect-source";
-import type { BindGroupIdentityPart } from "./bind-cache.ts";
+import { identityKey, type BindGroupIdentityPart } from "./bind-cache.ts";
 import { incompatibleResourceError, textureFilterabilityError } from "./errors.ts";
 import type { Target } from "./target.ts";
 import { assertBufferUsable } from "./lifecycle.ts";
@@ -64,7 +64,7 @@ function normalizeBufferResource(binding: BindingInfo, value: unknown, context: 
     assertBufferUsable(value.buffer, `${context.sourceHint}.set`);
     return { resource: { buffer: value.gpu, offset: 0, size: value.size }, identity: value.buffer.resourceIdentity, unsubscribe: (cb) => value.buffer.onDestroy(cb) };
   }
-  if (isGPUBufferBinding(value)) return { resource: value, identity: syntheticIdentity(value.buffer) };
+  if (isGPUBufferBinding(value)) return normalizeBufferRegion(value);
   if (isRawGPUBuffer(value)) return { resource: { buffer: value }, identity: syntheticIdentity(value) };
   throw incompatibleResourceError(binding, "buffer", `Pass a compatible Buffer/Uniform: ${binding.name}.set({ ${binding.name}: gpu.device.createBuffer(...) }).`);
 }
@@ -128,7 +128,19 @@ function asTarget(value: unknown): RecreatingTarget | undefined {
 
 function hasAnyResourceShape(value: object): boolean {
   const record = value as ObjectRecord;
-  return "gpu" in record || "bindGroup" in record || "createView" in record || "resourceIdentity" in record;
+  // A bare `{ buffer, offset?, size? }` GPUBufferBinding carries none of the vgpu markers but is a resource, not a plain value.
+  return "gpu" in record || "bindGroup" in record || "createView" in record || "resourceIdentity" in record || isGPUBufferBinding(record);
+}
+
+/**
+ * Two regions of one GPUBuffer are two bind-group inputs: the identity carries the range, so the bind-group
+ * cache keys them apart and the storage-aliasing preflight can compare intervals instead of buffers.
+ */
+function normalizeBufferRegion(value: GPUBufferBinding): NormalizedBindingResource {
+  const offset = value.offset ?? 0;
+  const size = value.size ?? value.buffer.size - offset;
+  const identity = `${identityKey(syntheticIdentity(value.buffer))}@${offset}+${size}`;
+  return { resource: { buffer: value.buffer, offset, size }, identity };
 }
 
 function syntheticIdentity(value: unknown): BindGroupIdentityPart {

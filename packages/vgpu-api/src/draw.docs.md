@@ -468,4 +468,5 @@ Each color/depth/sample-count variant is a different pipeline. A missed variant 
 - A non-zero `firstInstance` inside the buffered indirect arguments silently turns the draw into a no-op unless the device has the `"indirect-first-instance"` feature. The value lives on the GPU, so vgpu cannot validate it — request the feature with `init({ requiredFeatures: ["indirect-first-instance"] })` when you need it.
 - One-shot `draw.draw()` has no implicit target and returns `void`; raw claimed-group validation errors are delivered through `gpu.onError`, and tests can `await gpu.settled()`.
 - Changing resource identity after a draw is recorded in a `Bundle` marks that bundle stale; changing JS values in-place does not.
+- Buffer bindings accept vgpu `Buffer`/`Uniform`/`StorageBuffer` handles, a raw `GPUBuffer`, or a bare `{ buffer: GPUBuffer, offset?, size? }` region. A region is a user-owned resource (never a JS value to upload), and two regions of one buffer are two bind-group identities: switching between them rebinds, and returning to a range already bound is a cache hit.
 - **See also:** `Effect`, `FramePass.draw`, `Bundle`, `Surface`, `Target`, `SharedUniforms`.

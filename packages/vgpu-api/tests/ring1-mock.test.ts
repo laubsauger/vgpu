@@ -121,6 +121,26 @@ test("R2 cache hits when alternating between two user-owned resource identities"
   gpu.dispose();
 });
 
+test("a bare GPUBufferBinding region is a user resource, and two regions of one buffer are two bind groups", async () => {
+  const gpu = await init();
+  const drawable = effect(gpu, CAMERA_SHADER, { label: "cameraPass" });
+  const colorTarget = target(gpu, { size: [4, 4] });
+  // Raw GPUBuffer: the shape WebGPU hands back, with none of the vgpu markers.
+  const arena = gpu.device.createBuffer({ size: 512, usage: ["uniform", "copy_dst"] }).gpu;
+  const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
+
+  drawable.set({ camera: { buffer: arena, offset: 0, size: 256 } });
+  frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (p) => p.draw(drawable)));
+  drawable.set({ camera: { buffer: arena, offset: 256, size: 256 } });
+  frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (p) => p.draw(drawable)));
+  drawable.set({ camera: { buffer: arena, offset: 0, size: 256 } });
+  frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (p) => p.draw(drawable)));
+
+  // Same buffer, different range: a second bind group, not a cache hit on the first; returning to the first range hits.
+  expect(mock.calls.createBindGroup).toBe(2);
+  gpu.dispose();
+});
+
 test("bundle back-refs stale only on identity changes, never lib-owned in-place writes", async () => {
   const gpu = await init();
   const wave = effect(gpu, WAVE, { label: "wave", set: { speed: 2 } });
