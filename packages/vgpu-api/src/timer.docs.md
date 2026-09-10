@@ -5,7 +5,7 @@ GPU pass timer created by `timer(gpu)`; requires the `"timestamp-query"` device 
 ## Import
 
 ```ts
-import type { Timer, TimerSpan } from "vgpu";
+import type { Timer, TimerFrameExtent, TimerResultsListener, TimerSpan } from "vgpu";
 ```
 
 ## Signature
@@ -15,9 +15,16 @@ interface TimerSpan {
   readonly name: string;
 }
 
+interface TimerFrameExtent {
+  readonly extentMs: number;
+  readonly frame: Frame;
+}
+
+type TimerResultsListener = (spans: Readonly<Record<string, number>>, extent: TimerFrameExtent) => void;
+
 interface Timer {
   span(name: string): TimerSpan;
-  onResults(cb: (spans: Readonly<Record<string, number>>) => void): () => void;
+  onResults(cb: TimerResultsListener): () => void;
   dispose(): void;
 }
 ```
@@ -28,7 +35,7 @@ interface Timer {
 |---|---|---:|---|---|
 | timer() | — | — | — | No parameters. |
 | timer.span.name | `string` | ✔ | — | Non-empty result key. Spans are memoized per name, so `timer.span("shadows")` is allocation-free in hot loops. |
-| timer.onResults.cb | `(spans: Readonly<Record<string, number>>) => void` | ✔ | — | Receives one frozen `name → milliseconds` record per timed frame. |
+| timer.onResults.cb | `TimerResultsListener` | ✔ | — | Receives one frozen `name → milliseconds` record per timed frame, and a frozen `TimerFrameExtent` for that frame: `extentMs` is the earliest span begin to the latest span end, `frame` is the `Frame` the spans were attached to. |
 
 **Returns:** `timer(gpu)` returns `Timer`; `span()` returns a `TimerSpan` to pass as `FramePassOptions.timer`; `onResults()` returns an unsubscribe function; `dispose()` returns `void`.
 
@@ -53,8 +60,8 @@ const casters = effect(gpu, `@fragment fn fs_main() -> @location(0) vec4f { retu
 const world = effect(gpu, `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }`);
 
 const gpuTimer = timer(gpu);
-gpuTimer.onResults((spans) => {
-  console.log(`shadows ${spans.shadows}ms, main ${spans.main}ms`);
+gpuTimer.onResults((spans, { extentMs }) => {
+  console.log(`shadows ${spans.shadows}ms, main ${spans.main}ms, frame ${extentMs}ms`);
 });
 
 const loop = frameLoop(gpu, (f) => {
@@ -77,6 +84,7 @@ gpuTimer?.onResults((spans) => console.table(spans));
 
 - Start with a `Timer` before optimizing a suspected bottleneck: CPU wall-clock timings measure submission/encoding, not GPU execution. Results are asynchronous and normally arrive one to two frames after submit, so use them as a rolling signal rather than an immediate branch condition.
 - Results are GPU durations decoded from timestamp pairs: `(end - begin)` nanosecond ticks converted to milliseconds. Timestamp values are implementation-defined, and WebGPU notes the counter "may reset ... which can result in unexpected values such as negative deltas"; vgpu clamps negative deltas to `0` instead of reporting garbage.
+- Do not sum spans to get a frame time; read `extent.extentMs`. Spans only bracket their own pass, so the gaps between passes are missing from the sum, and on GPUs that sample timestamps at stage boundaries (Apple GPUs under Metal, for one) every pass's begin lands near the start of the command buffer while the ends are sequential — the spans nest and their sum overstates the frame by ~(N+1)/2. The extent is the earliest begin to the latest end across the frame's spans, from the same raw timestamps; a pair clamped to `0` is left out of it. `extent.frame` is the `Frame` that submitted, for callers that track several.
 - Readback never blocks a frame: results resolve through rotated staging buffers, and when readbacks lag more frames than the ring holds, that frame's results are dropped rather than awaited. A dropped frame is dropped **whole** — no resolve is encoded at all, `onResults` simply does not fire for it, and nothing is merged or partially applied; the next frame that finds a free staging buffer reports again. `await gpu.settled()` covers pending readbacks for deterministic tests and teardown.
 - One timer can be used from several frames that are open at the same time, but results stay scoped to the newest one: opening a frame retargets the timer's per-frame bookkeeping, so an older frame submitted afterwards encodes no resolve and reports nothing (its spans are dropped, never merged into the newer frame's results). Submitting it is always safe, however long it stayed open — the query set it referenced is kept alive for it.
 - A manual `frame(gpu)` that attached a span holds the timer's query set until you `submit()` or `cancel()` it (a `frame(gpu, cb)` whose callback throws is canceled and releases it too). Dropping such a frame without either leaks those resources for the lifetime of the gpu — the same leak as a native `GPUCommandEncoder` you never `finish()` — because a frame is never assumed abandoned: it could still be submitted. Always close the frames you open — `submit()` them, or `frame.cancel()` the ones you decided not to submit, which releases the query set without encoding a resolve or reporting a result — or let `frame(gpu, cb)` do it for you; `gpu.dispose()` (or device loss) is the backstop.

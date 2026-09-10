@@ -1,6 +1,7 @@
 import type { Device } from "@vgpu/core";
 import { timerCapacityError, timerInvalidError } from "./errors.ts";
 import { FRAME_PASS_ATTACHMENT, type FramePassAttachContext, type FramePassAttachment, type FramePassAttachResult } from "./frame-protocols.ts";
+import type { Frame } from "./frame.ts";
 import type { Gpu } from "./kernel.ts";
 import { liveKernel, ownQueryFeature } from "./live-kernel.ts";
 import { createQueryRing, type QueryHostOptions, type QueryRing } from "./query-ring.ts";
@@ -14,12 +15,30 @@ export interface TimerSpan {
   readonly name: string;
 }
 
+/**
+ * What one frame's spans say about the frame as a whole, handed to `timer.onResults` beside the
+ * per-span durations. `extentMs` runs from the earliest span begin to the latest span end of that
+ * frame's submit; `frame` is the `Frame` the spans were attached to, so a result can be tied back
+ * to what was encoded.
+ *
+ * Per-span durations cannot be summed into a frame figure: on GPUs that sample timestamps at
+ * stage boundaries (Apple GPUs under Metal, for one) every pass's begin lands near the start of
+ * the command buffer while the ends are sequential, so spans nest and their sum overstates the
+ * frame by ~(N+1)/2. The raw timestamps that resolve this are only ever seen inside the timer.
+ */
+export interface TimerFrameExtent {
+  readonly extentMs: number;
+  readonly frame: Frame;
+}
+
+export type TimerResultsListener = (spans: Readonly<Record<string, number>>, extent: TimerFrameExtent) => void;
+
 /** GPU pass timer created by `timer(gpu)`. Needs the "timestamp-query" device feature. */
 export interface Timer {
   /** Marks a pass for timing. Pass the result as FramePassOptions.timer. One name per frame. */
   span(name: string): TimerSpan;
-  /** Registers a callback invoked whenever a new set of results lands (typically 1-2 frames after submit). Times in milliseconds. Returns an unsubscribe function. */
-  onResults(cb: (spans: Readonly<Record<string, number>>) => void): () => void;
+  /** Registers a callback invoked whenever a new set of results lands (typically 1-2 frames after submit). Times in milliseconds; the second argument is the frame's extent. Returns an unsubscribe function. */
+  onResults(cb: TimerResultsListener): () => void;
   /** Releases the timer's query set and buffers. Further use of the timer or its spans throws. */
   dispose(): void;
 }
@@ -80,7 +99,7 @@ export class InternalTimer {
   readonly #device: Device;
   readonly #host: QueryHostOptions;
   readonly #spans = new Map<string, InternalTimerSpan>();
-  readonly #listeners = new Set<(spans: Readonly<Record<string, number>>) => void>();
+  readonly #listeners = new Set<TimerResultsListener>();
   #ring: QueryRing;
   #capacity = INITIAL_SPAN_CAPACITY * 2;
   /** High-water query demand; capacity grows to cover it at the next frame boundary. */
@@ -130,7 +149,7 @@ export class InternalTimer {
     return span;
   }
 
-  onResults(cb: (spans: Readonly<Record<string, number>>) => void): () => void {
+  onResults(cb: TimerResultsListener): () => void {
     this.#assertUsable("Timer.onResults");
     this.#listeners.add(cb);
     return () => { this.#listeners.delete(cb); };
@@ -210,7 +229,7 @@ export class InternalTimer {
       // The ring orders its own readbacks; this guard extends the ordering across ring recreations (capacity growth).
       if (seq <= this.#appliedSeq) return;
       this.#appliedSeq = seq;
-      this.#dispatch(spans, values);
+      this.#dispatch(spans, values, frame as Frame);
     });
   }
 
@@ -240,18 +259,26 @@ export class InternalTimer {
     this.#usedQueries = 0;
   }
 
-  #dispatch(spans: readonly FrameSpan[], values: BigUint64Array): void {
+  #dispatch(spans: readonly FrameSpan[], values: BigUint64Array, frame: Frame): void {
     const results: Record<string, number> = {};
+    let first: bigint | undefined;
+    let last: bigint | undefined;
     for (const { name, begin } of spans) {
       const start = values[begin] ?? 0n;
       const end = values[begin + 1] ?? 0n;
       // Timestamps are implementation-defined ns ticks and the counter may reset between writes
       // ("unexpected values such as negative deltas ... can safely be discarded"): clamp negatives to 0.
       results[name] = end > start ? Number(end - start) * MS_PER_NS : 0;
+      // A clamped pair says nothing about where the frame starts or ends; it is left out of the extent.
+      if (end > start) {
+        if (first === undefined || start < first) first = start;
+        if (last === undefined || end > last) last = end;
+      }
     }
     const frozen = Object.freeze(results);
+    const extent: TimerFrameExtent = Object.freeze({ extentMs: first !== undefined && last !== undefined ? Number(last - first) * MS_PER_NS : 0, frame });
     for (const listener of [...this.#listeners]) {
-      try { listener(frozen); }
+      try { listener(frozen, extent); }
       catch (error) { console.error(error); }
     }
   }

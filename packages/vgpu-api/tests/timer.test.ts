@@ -1,7 +1,8 @@
 import { expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { createMockAdapter, init, frame, target, visibility } from "../src/mock.ts";
-import { timer } from "../src/timer.ts";
+import { timer, type TimerFrameExtent } from "../src/timer.ts";
+import type { Frame } from "../src/frame.ts";
 
 function initWithTimestampQuery() {
   return init({ adapter: createMockAdapter({ features: ["timestamp-query"] }), requiredFeatures: ["timestamp-query"] });
@@ -106,6 +107,46 @@ test("onResults fires with decoded millisecond values from the mock's fake times
   frame(gpu, (currentFrame) => currentFrame.pass({ target: scene, timer: gpuTimer1.span("main") }, () => undefined));
   await gpu.settled();
   expect(results).toHaveLength(1);
+  gpuTimer1.dispose();
+  gpu.dispose();
+});
+
+test("onResults hands the frame's extent beside the spans: earliest begin to latest end, tied to the submitted Frame", async () => {
+  const gpu = await initWithTimestampQuery();
+  const gpuTimer1 = timer(gpu);
+  const shadowMap = target(gpu, { size: [4, 4] });
+  const scene = target(gpu, { size: [4, 4] });
+  const received: Array<{ spans: Readonly<Record<string, number>>; extent: TimerFrameExtent }> = [];
+  gpuTimer1.onResults((spans, extent) => { received.push({ spans, extent }); });
+
+  let submitted: Frame | undefined;
+  frame(gpu, (currentFrame) => {
+    submitted = currentFrame;
+    currentFrame.pass({ target: shadowMap, timer: gpuTimer1.span("shadows") }, () => undefined);
+    currentFrame.pass({ target: scene, timer: gpuTimer1.span("main") }, () => undefined);
+  });
+  await gpu.settled();
+
+  // Mock timestamps: query i -> i*i ms. Spans are (0,1) = 1 ms and (2,3) = 5 ms; the frame runs
+  // from query 0 to query 3 = 9 ms. The gap between the passes is real frame time the spans do not
+  // add up to (1 + 5 = 6), which is what the extent is for.
+  expect(received).toHaveLength(1);
+  expect(received[0]!.spans).toEqual({ shadows: 1, main: 5 });
+  expect(received[0]!.extent.extentMs).toBe(9);
+  expect(received[0]!.extent.frame).toBe(submitted);
+  expect(Object.isFrozen(received[0]!.extent)).toBe(true);
+
+  // A single-span frame has an extent equal to its span, and each frame's extent names its own Frame.
+  let second: Frame | undefined;
+  frame(gpu, (currentFrame) => {
+    second = currentFrame;
+    currentFrame.pass({ target: scene, timer: gpuTimer1.span("main") }, () => undefined);
+  });
+  await gpu.settled();
+  expect(received).toHaveLength(2);
+  expect(received[1]!.extent.extentMs).toBe(received[1]!.spans.main);
+  expect(received[1]!.extent.frame).toBe(second);
+  expect(received[1]!.extent.frame).not.toBe(submitted);
   gpuTimer1.dispose();
   gpu.dispose();
 });
