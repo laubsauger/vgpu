@@ -162,7 +162,9 @@ export class Frame {
     if (isSurface(resolvedTarget) && this.#submitted) throw surfaceNotInFrameError("Frame.pass");
     const clear = targetOnly ? undefined : target.clear;
     const preserve = clear === false;
-    if (preserve && resolvedTarget.sampleCount === 4) throw passPreserveMsaaError();
+    // An MSAA target discards its samples after each pass, so there is nothing for a preserve pass to
+    // load — unless the target opted into storing them (`preserveSamples`).
+    if (preserve && resolvedTarget.sampleCount === 4 && !resolvedTarget.preserveSamples) throw passPreserveMsaaError();
     const clearDepth = targetOnly ? undefined : target.clearDepth;
     if (clearDepth !== undefined) {
       if (typeof clearDepth !== "number" || !(clearDepth >= 0 && clearDepth <= 1)) throw passClearDepthInvalidError(clearDepth);

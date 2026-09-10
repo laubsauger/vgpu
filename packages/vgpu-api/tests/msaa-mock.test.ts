@@ -38,6 +38,52 @@ test("MSAA render pass descriptors resolve color and discard transient attachmen
   }
 });
 
+test("preserveSamples stores the multisample attachments across passes and still resolves every pass", async () => {
+  const gpu = await init();
+  const renderPasses = spyRenderPassDescriptors(gpu.device.gpu);
+  try {
+    const accumulating = target(gpu, { size: [4, 4], depth: "depth24plus-stencil8", msaa: true, preserveSamples: true });
+    expect(accumulating.sampleCount).toBe(4);
+    expect(accumulating.preserveSamples).toBe(true);
+    const draw = effect(gpu, SOLID, { label: "msaa-accumulate" });
+
+    // Two passes into one MSAA target: the second preserves what the first drew. Without
+    // preserveSamples this is VGPU-PASS-PRESERVE-MSAA (see "frame.pass rejects clear false" in blend-load).
+    frame(gpu, (currentFrame) => {
+      currentFrame.pass({ target: accumulating }, (pass) => pass.draw(draw));
+      currentFrame.pass({ target: accumulating, clear: false }, (pass) => pass.draw(draw));
+    });
+
+    expect(renderPasses).toHaveLength(2);
+    for (const descriptor of renderPasses) {
+      // Resolve every pass, so a mid-chain reader of `.color` sees the current accumulation.
+      expect(descriptor.colorAttachments[0]?.resolveTarget).toBeDefined();
+      expect(descriptor.colorAttachments[0]?.storeOp).toBe("store");
+      expect(descriptor.depthStencilAttachment?.depthStoreOp).toBe("store");
+      expect(descriptor.depthStencilAttachment?.stencilStoreOp).toBe("store");
+    }
+    expect(renderPasses[0]?.colorAttachments[0]?.loadOp).toBe("clear");
+    expect(renderPasses[1]?.colorAttachments[0]?.loadOp).toBe("load");
+    expect(renderPasses[1]?.depthStencilAttachment?.depthLoadOp).toBe("load");
+    expect(renderPasses[1]?.depthStencilAttachment?.stencilLoadOp).toBe("load");
+    // The default is unchanged: a target that did not opt in keeps discarding.
+    expect(target(gpu, { size: [4, 4], msaa: true }).preserveSamples).toBe(false);
+  } finally {
+    gpu.dispose();
+    vi.restoreAllMocks();
+  }
+});
+
+test("preserveSamples without msaa is a dead option and throws VGPU-TARGET-PRESERVE-SAMPLES", async () => {
+  const gpu = await init();
+  try {
+    expectThrown(() => target(gpu, { size: [4, 4], preserveSamples: true }), { code: "VGPU-TARGET-PRESERVE-SAMPLES" });
+    expectThrown(() => target(gpu, { size: [4, 4], msaa: false, preserveSamples: true }), { code: "VGPU-TARGET-PRESERVE-SAMPLES" });
+  } finally {
+    gpu.dispose();
+  }
+});
+
 test("MSAA targets compile pipelines with sample count 4", async () => {
   const gpu = await init();
   try {

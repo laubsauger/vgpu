@@ -218,8 +218,8 @@ export function indirectInvalidError(label: string, reason: string, where: strin
 export function passPreserveMsaaError(): VGPUError {
   return new VGPUError({
     code: "VGPU-PASS-PRESERVE-MSAA",
-    message: "clear:false cannot preserve MSAA; use a non-MSAA target.",
-    fix: "Use non-MSAA for accumulation.",
+    message: "clear:false cannot preserve MSAA: the multisample attachments are discarded after each pass.",
+    fix: "Create the target with preserveSamples: true to store them across passes, or accumulate into a non-MSAA target.",
     where: "Frame.pass",
   });
 }
@@ -477,6 +477,15 @@ export function compileSignatureInvalidError(where: string, reason: string): VGP
     message: `Invalid TargetSignature: ${reason}`,
     fix: "Pass { colors, depth?, sampleCount?:1|4 } or a Target.",
     where,
+  });
+}
+
+export function targetPreserveSamplesError(): VGPUError {
+  return new VGPUError({
+    code: "VGPU-TARGET-PRESERVE-SAMPLES",
+    message: "preserveSamples needs msaa; a single-sample target has no multisample attachments to keep.",
+    fix: "Add msaa: true (the samples are then stored across passes), or drop preserveSamples.",
+    where: "target",
   });
 }
 

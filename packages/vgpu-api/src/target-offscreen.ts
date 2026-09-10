@@ -48,6 +48,7 @@ export class OffscreenTarget implements Target {
   get clearColor(): ClearColor { return copyClearColor(this.#clearColor); }
   set clearColor(value: ClearColor) { this.#clearColor = validateClearColor(value, "target.clearColor"); }
   get sampleCount(): 1 | 4 { return sampleCountFor(this.options); }
+  get preserveSamples(): boolean { return this.options.preserveSamples === true; }
 
   resize(size: readonly [number, number]): void {
     if (sameSize(this.#currentSize, size)) return;
@@ -63,8 +64,8 @@ export class OffscreenTarget implements Target {
   renderPassDescriptor(opts: RenderPassDescriptorOptions = {}): GPURenderPassDescriptor {
     const { clear = [0, 0, 0, 1], preserve, clearDepth, clearStencil, depthReadOnly } = opts;
     return {
-      colorAttachments: this.#currentColors.map((resolved, index) => colorAttachment(resolved, this.#currentMsaaColors?.[index], clear, preserve)),
-      depthStencilAttachment: this.#currentDepth ? depthAttachment(this.#currentDepth, preserve, clearDepth, clearStencil, depthReadOnly) : undefined,
+      colorAttachments: this.#currentColors.map((resolved, index) => colorAttachment(resolved, this.#currentMsaaColors?.[index], clear, preserve, this.preserveSamples)),
+      depthStencilAttachment: this.#currentDepth ? depthAttachment(this.#currentDepth, preserve, clearDepth, clearStencil, depthReadOnly, this.preserveSamples) : undefined,
     };
   }
 

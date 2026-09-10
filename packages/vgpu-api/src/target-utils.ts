@@ -1,4 +1,4 @@
-import { clearColorInvalidError, targetSizeRequiredError, targetStencilOnlyDepthError, unsupportedError } from "./errors.ts";
+import { clearColorInvalidError, targetPreserveSamplesError, targetSizeRequiredError, targetStencilOnlyDepthError, unsupportedError } from "./errors.ts";
 import type { Target, TargetOptions, TargetTextureOptions } from "./target.ts";
 
 export const DEFAULT_FORMAT: GPUTextureFormat = "rgba8unorm";
@@ -48,6 +48,8 @@ export function sampleCountFor(options: TargetTextureOptions): 1 | 4 {
 
 export function validateTargetOptions(options: Partial<TargetOptions> | undefined, caps: TargetDeviceCaps): void {
   if (!options?.size) throw targetSizeRequiredError();
+  // Dead-option rule: without msaa there are no multisample attachments to preserve.
+  if (options.preserveSamples && sampleCountFor(options) !== 4) throw targetPreserveSamplesError();
   const depthFormat = depthFormatFor(options);
   // Stencil-only formats have no depth aspect, so the default depth state (depthWriteEnabled: true) cannot compile against them.
   if (depthFormat === "stencil8") throw targetStencilOnlyDepthError(depthFormat);
@@ -64,18 +66,23 @@ function validateMsaaFormat(format: GPUTextureFormat, caps: TargetDeviceCaps): v
   );
 }
 
-export function colorAttachment(resolved: { createView(): GPUTextureView }, msaa: { createView(): GPUTextureView } | undefined, clear: ClearColor, preserve?: boolean): GPURenderPassColorAttachment {
+/**
+ * Multisample attachments are discarded after the resolve unless the target preserves samples:
+ * the resolved texture is what later passes sample, so the samples are dead weight — except when a
+ * later `clear: false` pass loads them, which is what `preserveSamples` opts into.
+ */
+export function colorAttachment(resolved: { createView(): GPUTextureView }, msaa: { createView(): GPUTextureView } | undefined, clear: ClearColor, preserve?: boolean, preserveSamples?: boolean): GPURenderPassColorAttachment {
   const attachment: GPURenderPassColorAttachment = {
     view: (msaa ?? resolved).createView(),
     resolveTarget: msaa ? resolved.createView() : undefined,
     loadOp: preserve ? "load" : "clear",
-    storeOp: msaa ? "discard" : "store",
+    storeOp: msaa && !preserveSamples ? "discard" : "store",
   };
   if (!preserve) attachment.clearValue = colorValue(clear);
   return attachment;
 }
 
-export function depthAttachment(depth: { createView(): GPUTextureView; readonly sampleCount?: number; readonly format?: GPUTextureFormat }, preserve?: boolean, clearDepth?: number, clearStencil?: number, readOnly?: boolean): GPURenderPassDepthStencilAttachment {
+export function depthAttachment(depth: { createView(): GPUTextureView; readonly sampleCount?: number; readonly format?: GPUTextureFormat }, preserve?: boolean, clearDepth?: number, clearStencil?: number, readOnly?: boolean, preserveSamples?: boolean): GPURenderPassDepthStencilAttachment {
   if (readOnly) {
     // WebGPU requires the ops to be OMITTED for read-only aspects: "If format has a depth aspect and
     // this.depthReadOnly is false: this.depthLoadOp must be provided. this.depthStoreOp must be provided.
@@ -85,12 +92,15 @@ export function depthAttachment(depth: { createView(): GPUTextureView; readonly 
     if (hasStencilAspect(depth.format)) attachment.stencilReadOnly = true;
     return attachment;
   }
-  const attachment: GPURenderPassDepthStencilAttachment = { view: depth.createView(), depthLoadOp: preserve ? "load" : "clear", depthStoreOp: depth.sampleCount! > 1 ? "discard" : "store" };
+  // Multisampled depth follows the color rule: discarded after the pass unless the target preserves
+  // samples, in which case a later preserve pass depth-tests against what this pass wrote.
+  const discardSamples = depth.sampleCount! > 1 && !preserveSamples;
+  const attachment: GPURenderPassDepthStencilAttachment = { view: depth.createView(), depthLoadOp: preserve ? "load" : "clear", depthStoreOp: discardSamples ? "discard" : "store" };
   if (!preserve) attachment.depthClearValue = clearDepth ?? 1;
   // WebGPU requires stencilLoadOp/stencilStoreOp whenever the format has a stencil aspect and stencilReadOnly is not set.
   if (depth.format && hasStencilAspect(depth.format)) {
     attachment.stencilLoadOp = preserve ? "load" : "clear";
-    attachment.stencilStoreOp = depth.sampleCount! > 1 ? "discard" : "store";
+    attachment.stencilStoreOp = discardSamples ? "discard" : "store";
     if (!preserve) attachment.stencilClearValue = clearStencil ?? 0;
   }
   return attachment;

@@ -88,7 +88,7 @@ declare class FrameRunner {
 
 - `VGPU-TARGET-REQUIRED` — a runtime JS call omitted the frame pass target. Name a `Surface` or offscreen `Target` in every `frame.pass`.
 - `VGPU-CLEAR-COLOR-INVALID` — `target.clearColor` / `surface.clearColor` (at creation or on assignment) or a pass clear color is not four finite numbers. Assign `[r, g, b, a]` or a `GPUColor` object.
-- `VGPU-PASS-PRESERVE-MSAA` — `clear: false` on an MSAA target; multisample attachments use `storeOp: "discard"`, so there is nothing to preserve. Render accumulation/preserve passes into a non-MSAA target.
+- `VGPU-PASS-PRESERVE-MSAA` — `clear: false` on an MSAA target created without `preserveSamples`; its multisample attachments use `storeOp: "discard"`, so there is nothing to preserve. Create the target with `preserveSamples: true`, or render accumulation/preserve passes into a non-MSAA target.
 - `VGPU-PASS-CLEARDEPTH-INVALID` — `clearDepth` is not a number in `[0, 1]`, or the target has no depth attachment (the option would have no effect). Create the target with `depth: true`, or drop `clearDepth`.
 - `VGPU-PASS-PRESERVE-CLEARDEPTH` — `clearDepth` combined with `clear: false`; preserved depth is never cleared. Drop one of the two.
 - `VGPU-PASS-CLEARSTENCIL-INVALID` — `clearStencil` is not an integer in `[0, 0xFFFFFFFF]`, or the target's depth format has no stencil aspect (the option would have no effect). Create the target with `depth: "depth24plus-stencil8"`.
