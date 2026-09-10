@@ -104,6 +104,7 @@ interface Draw {
   draw(target?: Target | DrawCallOptions): void;
   compile(target?: Target | TargetSignature): Promise<this>;
   compileSync(target?: Target | TargetSignature): this;
+  evictBindGroups(): void;
 }
 ```
 
@@ -174,7 +175,7 @@ interface Draw {
 | depthFail | `GPUStencilOperation` | ✖ | `"keep"` | Operation when the stencil comparison passes but the depth test fails. |
 | pass | `GPUStencilOperation` | ✖ | `"keep"` | Operation when both comparisons pass. `"replace"` writes `ref`, marking the region for later draws. |
 
-**Returns:** `draw(gpu)` returns `Draw`; `set()`, `group()`, and `compileSync()` return the same `Draw`; `layout()` returns a `GPUBindGroupLayout`; one-shot `draw()` returns `void`; `compile()` returns `Promise<this>`.
+**Returns:** `draw(gpu)` returns `Draw`; `set()`, `group()`, and `compileSync()` return the same `Draw`; `layout()` returns a `GPUBindGroupLayout`; one-shot `draw()` and `evictBindGroups()` return `void`; `compile()` returns `Promise<this>`.
 
 **Throws:** one `VGPU-*` code per condition below. Checks marked † resolve against the target signature at compile/draw time; with `targets: [...]` they surface from `draw(gpu)` itself, because that option compiles at construction.
 
@@ -468,4 +469,5 @@ Each color/depth/sample-count variant is a different pipeline. A missed variant 
 - A non-zero `firstInstance` inside the buffered indirect arguments silently turns the draw into a no-op unless the device has the `"indirect-first-instance"` feature. The value lives on the GPU, so vgpu cannot validate it — request the feature with `init({ requiredFeatures: ["indirect-first-instance"] })` when you need it.
 - One-shot `draw.draw()` has no implicit target and returns `void`; raw claimed-group validation errors are delivered through `gpu.onError`, and tests can `await gpu.settled()`.
 - Changing resource identity after a draw is recorded in a `Bundle` marks that bundle stale; changing JS values in-place does not.
+- Bind groups are cached per drawable in one gpu-wide cache and evicted on their own only when a bound resource is destroyed or recreated. A drawable you discard, or whose bound resources you rotate out without destroying them, keeps its `GPUBindGroup`s (and the buffers and textures they reference) alive until `gpu.dispose()`. Call `evictBindGroups()` at that boundary: it drops only the cached bind groups — bindings keep their values and ownership, pipelines and layouts are untouched — and the next draw rebuilds what it needs.
 - **See also:** `Effect`, `FramePass.draw`, `Bundle`, `Surface`, `Target`, `SharedUniforms`.

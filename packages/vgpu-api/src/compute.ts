@@ -70,7 +70,7 @@ export class ComputePipeline implements Compute {
       layout: this.pipelineLayout,
       compute: { module: this.shaderModule, entryPoint: this.entryPoint, ...(constants ? { constants } : {}) },
     });
-    this.setCore = createSetCore({ device, label: this.label, drawId: this.id, reflection: this.reflection, bindGroupLayouts: this.bindGroupLayouts, cache: this.cache });
+    this.setCore = createSetCore({ device, label: this.label, drawId: `compute:${this.id}`, reflection: this.reflection, bindGroupLayouts: this.bindGroupLayouts, cache: this.cache });
     const active = new Set(entryMetadata(entry, "bindings", this.label).map((binding) => `${binding.group}:${binding.binding}`));
     this.#storageBindings = this.reflection.bindings.filter((binding) => binding.kind === "buffer" && binding.addressSpace === "storage" && active.has(`${binding.group}:${binding.binding}`));
     if (opts.set) this.set(opts.set);
@@ -80,6 +80,15 @@ export class ComputePipeline implements Compute {
     assertDeviceUsable(this.device, `${this.label}.set`);
     this.setCore.set(values);
     return this;
+  }
+
+  /**
+   * Drops every bind group this compute cached; bindings, pipeline and layouts stay. See
+   * {@link InternalDraw.evictBindGroups}. The `compute:` prefix keeps a compute's cache slot apart from a draw
+   * that happens to share its numeric id, since both draw from one gpu-wide cache with separate id counters.
+   */
+  evictBindGroups(): void {
+    this.cache.clearDraw(`compute:${this.id}`);
   }
 
   dispatch(x: number, y?: number, z?: number): void;

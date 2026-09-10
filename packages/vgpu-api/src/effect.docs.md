@@ -32,6 +32,7 @@ interface Effect {
   draw(target?: Target | DrawCallOptions): void;
   compile(target?: Target | TargetSignature): Promise<this>;
   compileSync(target?: Target | TargetSignature): this;
+  evictBindGroups(): void;
 }
 ```
 
@@ -105,4 +106,5 @@ Effects compile lazily for the target signature they draw into. Use `await effec
 - One-shot `effect.draw()` does not join a surrounding frame. Inside `frame(gpu)`, draw through `frame.pass()`.
 - There is no implicit screen target. Browser code should create a `Surface` and pass it as `target`.
 - Do not rely on implicit uniforms like time or resolution; pass `clock(gpu).time`, `target.size`, or `target.texelSize` explicitly through `set()`.
+- `evictBindGroups()` behaves as on `Draw`: it drops the effect's cached bind groups and nothing else, for effects you discard or whose resources you rotate out without destroying.
 - **See also:** `effect`, `Draw`, `FramePass.draw`, `Surface`, `Target`, `SharedUniforms`.

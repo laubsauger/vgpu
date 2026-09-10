@@ -13,7 +13,7 @@ export type BindingOwnership = "lib" | "user";
 export interface SetCoreOptions {
   readonly device: Device;
   readonly label: string;
-  readonly drawId: number;
+  readonly drawId: number | string;
   readonly reflection: Reflection;
   readonly bindGroupLayouts: ReadonlyMap<number, GPUBindGroupLayout>;
   readonly cache: BindGroupCache;

@@ -61,6 +61,8 @@ export interface Effect {
   compile(target?: CompileTarget): Promise<this>;
   /** @throws VGPU-SURFACE-NOT-IN-FRAME when passed a Surface outside frame(gpu). */
   compileSync(target?: CompileTarget): this;
+  /** Drops the bind groups cached for this effect; the next draw rebuilds them. See `Draw.evictBindGroups`. */
+  evictBindGroups(): void;
 }
 
 export class InternalEffect implements Effect {
@@ -73,6 +75,7 @@ export class InternalEffect implements Effect {
   }
 
   set(values: SetBag): this { effectImpl(this).set(values); return this; }
+  evictBindGroups(): void { effectImpl(this).evictBindGroups(); }
   draw(target: Target | DrawCallOptions = {}): void { effectImpl(this).draw(isTarget(target) ? { target } : target); }
   compile(target?: CompileTarget): Promise<this> { return effectImpl(this).compile(target).then(() => this); }
   compileSync(target?: CompileTarget): this { effectImpl(this).compileSync(target); return this; }

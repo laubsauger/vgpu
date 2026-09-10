@@ -262,6 +262,8 @@ export interface Draw {
   compile(target?: CompileTarget): Promise<this>;
   /** @throws VGPU-SURFACE-NOT-IN-FRAME when passed a Surface outside frame(gpu). */
   compileSync(target?: CompileTarget): this;
+  /** Drops the bind groups cached for this draw; the next draw rebuilds them. Bindings, pipeline and layouts stay. */
+  evictBindGroups(): void;
 }
 
 /** Renderable shader unit with explicit bind layouts, set() ownership, pipeline cache, and R4 group hooks. */
@@ -348,6 +350,22 @@ export class InternalDraw implements Draw {
     assertDeviceUsable(state.device, `${this.label}.set`);
     for (const change of state.setCore.set(values)) state.recordedIn.markStale({ kind: "binding-identity", drawLabel: this.label, ...change });
     return this;
+  }
+
+  /**
+   * Drops every bind group cached for this draw and nothing else: bindings keep their values and ownership,
+   * and the pipeline, shader module and layouts (shared by key across draws) are untouched.
+   *
+   * Bind groups live in the gpu-wide cache keyed per draw, and the cache evicts on its own only when a bound
+   * resource is destroyed or recreated. A draw that is discarded, or whose bound resources are rotated out
+   * without being destroyed, therefore pins its GPUBindGroups — and through them every buffer and texture
+   * they reference — until the gpu is disposed. Callers that own such a lifecycle (a pool of drawables, an
+   * editor that rebuilds its graph) call this at the boundary. The next draw runs `getOrCreate` again, so an
+   * over-eager call costs a rebuilt bind group, never a wrong one.
+   */
+  evictBindGroups(): void {
+    const state = drawState(this);
+    state.cache.clearDraw(state.id);
   }
 
   group(n: number, bindGroup: GPUBindGroup): this {

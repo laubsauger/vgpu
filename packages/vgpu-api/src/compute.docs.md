@@ -26,6 +26,7 @@ interface Compute {
   set(values: Record<string, unknown>): this;
   dispatch(x: number, y?: number, z?: number): void;
   dispatch(opts: DispatchOptions): void;
+  evictBindGroups(): void;
 }
 
 type StorageAccess = "read" | "read-write";
@@ -164,4 +165,5 @@ GPU-driven dispatch: the first pass writes the workgroup counts from GPU-side st
 - Dispatch counts are forwarded to WebGPU; validate domain-specific bounds in your app.
 - Write indirect counts from another compute pass (bind the same buffer as storage) or from JS via `write()`. The same option shape drives GPU-driven draws via `DrawCallOptions.indirect`.
 - `storage(gpu)` creates storage buffers with `copy_src` and `copy_dst`, so they can be read back and rewritten from JS.
+- Bind groups are cached per compute in one gpu-wide cache and evicted on their own only when a bound resource is destroyed or recreated. A compute you discard, or whose bound resources you rotate out without destroying them, keeps its `GPUBindGroup`s (and the buffers and textures they reference) alive until `gpu.dispose()`. Call `evictBindGroups()` at that boundary: it drops only the cached bind groups — bindings keep their values and ownership, pipelines and layouts are untouched — and the next dispatch rebuilds what it needs.
 - **See also:** `compute`, `Draw.set`, `SharedUniforms`, `Target`, `StorageBuffer` from `vgpu/core`.
