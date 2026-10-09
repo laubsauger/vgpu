@@ -1,7 +1,6 @@
 import type { Device } from "@vgpu/core";
 import { timerCapacityError, timerInvalidError } from "./errors.ts";
-import { FRAME_PASS_ATTACHMENT, type FramePassAttachContext, type FramePassAttachment, type FramePassAttachResult } from "./frame-protocols.ts";
-import type { Frame } from "./frame.ts";
+import { FRAME_PASS_ATTACHMENT, type FrameHandle, type FramePassAttachContext, type FramePassAttachment, type FramePassAttachResult } from "./frame-protocols.ts";
 import type { Gpu } from "./kernel.ts";
 import { liveKernel, ownQueryFeature } from "./live-kernel.ts";
 import { createQueryRing, type QueryHostOptions, type QueryRing } from "./query-ring.ts";
@@ -15,20 +14,11 @@ export interface TimerSpan {
   readonly name: string;
 }
 
-/**
- * What one frame's spans say about the frame as a whole, handed to `timer.onResults` beside the
- * per-span durations. `extentMs` runs from the earliest span begin to the latest span end of that
- * frame's submit; `frame` is the `Frame` the spans were attached to, so a result can be tied back
- * to what was encoded.
- *
- * Per-span durations cannot be summed into a frame figure: on GPUs that sample timestamps at
- * stage boundaries (Apple GPUs under Metal, for one) every pass's begin lands near the start of
- * the command buffer while the ends are sequential, so spans nest and their sum overstates the
- * frame by ~(N+1)/2. The raw timestamps that resolve this are only ever seen inside the timer.
- */
+/** The extent covered by a frame's valid timestamp pairs, with its opaque frame identity. */
 export interface TimerFrameExtent {
+  /** Earliest valid begin to latest valid end, in milliseconds. Untimed work outside that interval is not included. */
   readonly extentMs: number;
-  readonly frame: Frame;
+  readonly frame: object;
 }
 
 export type TimerResultsListener = (spans: Readonly<Record<string, number>>, extent: TimerFrameExtent) => void;
@@ -37,7 +27,7 @@ export type TimerResultsListener = (spans: Readonly<Record<string, number>>, ext
 export interface Timer {
   /** Marks a pass for timing. Pass the result as FramePassOptions.timer. One name per frame. */
   span(name: string): TimerSpan;
-  /** Registers a callback invoked whenever a new set of results lands (typically 1-2 frames after submit). Times in milliseconds; the second argument is the frame's extent. Returns an unsubscribe function. */
+  /** Registers a callback invoked whenever results land (typically 1-2 frames after submit), with frozen per-span milliseconds and frame extent. Returns an unsubscribe function. */
   onResults(cb: TimerResultsListener): () => void;
   /** Releases the timer's query set and buffers. Further use of the timer or its spans throws. */
   dispose(): void;
@@ -104,7 +94,7 @@ export class InternalTimer {
   #capacity = INITIAL_SPAN_CAPACITY * 2;
   /** High-water query demand; capacity grows to cover it at the next frame boundary. */
   #demand = INITIAL_SPAN_CAPACITY * 2;
-  #frame: unknown;
+  #frame?: FrameHandle;
   #frameSpans: FrameSpan[] = [];
   readonly #frameNames = new Set<string>();
   #usedQueries = 0;
@@ -119,7 +109,7 @@ export class InternalTimer {
    * frames can still be submitted), so a Frame the caller drops without submit() keeps its retain
    * until gpu.dispose() or device loss, exactly like a native GPUCommandEncoder that never finishes.
    */
-  readonly #frameRetains = new Map<unknown, QueryRing>();
+  readonly #frameRetains = new Map<FrameHandle, QueryRing>();
   #disposed = false;
 
   constructor(device: Device, host: QueryHostOptions = {}) {
@@ -175,7 +165,7 @@ export class InternalTimer {
    * the query set is full (capacity grows at the next frame boundary — never mid-frame, since
    * earlier passes already reference the current set).
    */
-  attachSpan(span: InternalTimerSpan, frame: unknown, frameDevice: Device): GPURenderPassTimestampWrites | undefined {
+  attachSpan(span: InternalTimerSpan, frame: FrameHandle, frameDevice: Device): GPURenderPassTimestampWrites | undefined {
     this.#assertUsable("Frame.pass");
     if (frameDevice !== this.#device) {
       throw timerInvalidError(`span '${span.name}' belongs to a timer created on a different gpu; timestamp queries cannot cross devices.`, "Create one timer(gpu) per gpu and use its spans only with that gpu's frames.", "Frame.pass");
@@ -204,14 +194,14 @@ export class InternalTimer {
   }
 
   /** @internal Frame.submit hook, before encoder.finish(): appends this frame's single resolve to the frame encoder. */
-  finalizeFrame(frame: unknown, encoder: GPUCommandEncoder): void {
+  finalizeFrame(frame: FrameHandle, encoder: GPUCommandEncoder): void {
     this.#encodedSpans = undefined;
     if (this.#disposed || frame !== this.#frame || this.#usedQueries === 0) return;
     if (this.#ring.encodeResolve(encoder, this.#usedQueries)) this.#encodedSpans = [...this.#frameSpans];
   }
 
   /** @internal Frame.submit hook, after queue.submit succeeds: starts the non-blocking readback. */
-  frameSubmitted(frame: unknown): void {
+  frameSubmitted(frame: FrameHandle): void {
     // Release *this* frame's retain first, whichever ring it pinned: the command buffer is submitted
     // (or the frame was abandoned), so nothing it encoded references that query set anymore, and a
     // dispose() that landed mid-frame can now destroy the ring. Runs before the identity check so a
@@ -229,7 +219,7 @@ export class InternalTimer {
       // The ring orders its own readbacks; this guard extends the ordering across ring recreations (capacity growth).
       if (seq <= this.#appliedSeq) return;
       this.#appliedSeq = seq;
-      this.#dispatch(spans, values, frame as Frame);
+      this.#dispatch(spans, values, frame);
     });
   }
 
@@ -239,12 +229,12 @@ export class InternalTimer {
    * decode stale staging bytes as a phantom duration, and releases the retain this frame took when
    * it attached a span — the counterpart of frameSubmitted() for frames that never submit.
    */
-  frameAbandoned(frame: unknown): void {
+  frameAbandoned(frame: FrameHandle): void {
     if (frame === this.#frame) this.#encodedSpans = undefined;
     this.#releaseRing(frame);
   }
 
-  #beginFrame(frame: unknown): void {
+  #beginFrame(frame: FrameHandle): void {
     if (this.#demand > this.#ring.capacity) {
       // Grow only at frame boundaries. The retired ring keeps applying its in-flight readbacks
       // before releasing its resources, so growth never drops results already submitted.
@@ -259,7 +249,7 @@ export class InternalTimer {
     this.#usedQueries = 0;
   }
 
-  #dispatch(spans: readonly FrameSpan[], values: BigUint64Array, frame: Frame): void {
+  #dispatch(spans: readonly FrameSpan[], values: BigUint64Array, frame: FrameHandle): void {
     const results: Record<string, number> = {};
     let first: bigint | undefined;
     let last: bigint | undefined;
@@ -269,27 +259,30 @@ export class InternalTimer {
       // Timestamps are implementation-defined ns ticks and the counter may reset between writes
       // ("unexpected values such as negative deltas ... can safely be discarded"): clamp negatives to 0.
       results[name] = end > start ? Number(end - start) * MS_PER_NS : 0;
-      // A clamped pair says nothing about where the frame starts or ends; it is left out of the extent.
+      // Reversed or equal pairs have no valid interval to contribute to the extent.
       if (end > start) {
         if (first === undefined || start < first) first = start;
         if (last === undefined || end > last) last = end;
       }
     }
     const frozen = Object.freeze(results);
-    const extent: TimerFrameExtent = Object.freeze({ extentMs: first !== undefined && last !== undefined ? Number(last - first) * MS_PER_NS : 0, frame });
+    const extent: TimerFrameExtent = Object.freeze({
+      extentMs: first !== undefined && last !== undefined ? Number(last - first) * MS_PER_NS : 0,
+      frame,
+    });
     for (const listener of [...this.#listeners]) {
       try { listener(frozen, extent); }
       catch (error) { console.error(error); }
     }
   }
 
-  #retainRing(frame: unknown): void {
+  #retainRing(frame: FrameHandle): void {
     if (this.#frameRetains.has(frame)) return;
     this.#frameRetains.set(frame, this.#ring);
     this.#ring.retain();
   }
 
-  #releaseRing(frame: unknown): void {
+  #releaseRing(frame: FrameHandle): void {
     const ring = this.#frameRetains.get(frame);
     if (!ring) return;
     this.#frameRetains.delete(frame);

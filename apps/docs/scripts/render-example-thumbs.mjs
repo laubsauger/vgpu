@@ -1,15 +1,16 @@
-import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
-import typegpu from 'unplugin-typegpu/esbuild';
 import { init, target } from 'vgpu/node';
 import { comparePngSnapshot, writePng } from '@vgpu/cli/lib/snapshot/png.js';
-import { transformWgsl } from '@vgpu/wgsl/loader-vite';
+import { docsRendererPlugins } from './esbuild-wgsl-plugin.mjs';
 
 const args = parseArgs(process.argv.slice(2));
 const docsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const outDir = args.proofDir ? path.resolve(args.proofDir) : path.join(docsDir, 'public', 'examples');
+const outDir = args.proofDir ? path.resolve(args.proofDir)
+  : args.previewDir ? path.resolve(args.previewDir)
+  : path.join(docsDir, 'public', 'examples');
 const cacheDir = path.join(docsDir, '.thumbs-cache');
 const rendererEntry = path.join(cacheDir, 'renderers-entry.ts');
 const rendererBundle = path.join(cacheDir, 'renderers.mjs');
@@ -50,7 +51,7 @@ for (const example of selected) {
     const output = path.join(outDir, `${slug}.${kind}.png`);
     const result = await renderOne(renderers, example, size, metaThumb, output);
     const status = `${result.compare.status}${result.compare.ratio ? ` (${(result.compare.ratio * 100).toFixed(3)}%)` : ''}`;
-    console.log(`- ${slug}.${kind}: ${status}, variance=${result.variance.toFixed(2)}, bytes=${result.bytes}${result.aaMetrics ? `, ${formatAaMetrics(result.aaMetrics)}` : ''}${result.blackHoleMetrics ? `, black-hole=${JSON.stringify(result.blackHoleMetrics)}` : ''}${result.raymarchedFractalMetrics ? `, raymarched-fractal=${JSON.stringify(result.raymarchedFractalMetrics)}` : ''}${result.fftOceanMetrics ? `, fft-ocean=${JSON.stringify(result.fftOceanMetrics)}` : ''}${result.fluidMetrics ? `, fluid=${JSON.stringify(result.fluidMetrics)}` : ''}${result.fluidState ? `, state=${JSON.stringify(result.fluidState)}` : ''}${result.radianceStats ? `, radiance-cascades=${JSON.stringify(result.radianceStats)}` : ''}`);
+    console.log(`- ${slug}.${kind}: ${status}, variance=${result.variance.toFixed(2)}, bytes=${result.bytes}${result.aaMetrics ? `, ${formatAaMetrics(result.aaMetrics)}` : ''}${result.blackHoleMetrics ? `, black-hole=${JSON.stringify(result.blackHoleMetrics)}` : ''}${result.raymarchedFractalMetrics ? `, raymarched-fractal=${JSON.stringify(result.raymarchedFractalMetrics)}` : ''}${result.fftOceanMetrics ? `, fft-ocean=${JSON.stringify(result.fftOceanMetrics)}` : ''}${result.atmosphereMetrics ? `, atmosphere=${JSON.stringify(result.atmosphereMetrics)}` : ''}${result.fluidMetrics ? `, fluid=${JSON.stringify(result.fluidMetrics)}` : ''}${result.fluidState ? `, state=${JSON.stringify(result.fluidState)}` : ''}${result.radianceStats ? `, radiance-cascades=${JSON.stringify(result.radianceStats)}` : ''}`);
     comparisonSummary.push(`${slug}.${kind}: ${status}, variance=${result.variance.toFixed(2)}`);
     if (args.fluidSoak && slug === 'fluid') {
       // State checkpoints are asserted by onStateValidated; the soak image is diagnostic only.
@@ -74,7 +75,8 @@ async function renderOne(renderers, example, size, metaThumb, output) {
     const blackHoleVariantPixels = slug === 'black-hole' ? new Map() : undefined;
     const raymarchedFractalVariantPixels = slug === 'raymarched-fractal' ? new Map() : undefined;
     const fftOceanVariantPixels = slug === 'fft-ocean' ? new Map() : undefined;
-    const variantPixels = blackHoleVariantPixels ?? raymarchedFractalVariantPixels ?? fftOceanVariantPixels;
+    const atmosphereVariantPixels = slug === 'atmosphere' ? new Map() : undefined;
+    const variantPixels = blackHoleVariantPixels ?? raymarchedFractalVariantPixels ?? fftOceanVariantPixels ?? atmosphereVariantPixels;
     const modePixels = aaModePixels;
     let fluidState;
     let radianceStats;
@@ -102,7 +104,7 @@ async function renderOne(renderers, example, size, metaThumb, output) {
           ? (stats) => { assertFluidState(stats); fluidState = stats; }
           : slug === 'radiance-cascades' ? (stats) => { radianceStats = stats; } : undefined,
       });
-    const pixels = await colorTarget.read();
+    const pixels = await colorTarget.color.read({ mipLevel: 0, region: "all" });
     const aaMetrics = aaModePixels && !args.proofDir ? assertAaMetrics(aaModePixels, size[0], size[1]) : undefined;
     const fluidMetrics = slug === 'fluid' && !args.proofDir && !args.fluidSoak && !args.fluidDrag
       ? assertFluidMetrics(pixels, size[0], size[1])
@@ -115,6 +117,9 @@ async function renderOne(renderers, example, size, metaThumb, output) {
       : undefined;
     const fftOceanMetrics = fftOceanVariantPixels && !args.proofDir
       ? assertFftOceanMetrics(fftOceanVariantPixels, pixels, size[0], size[1])
+      : undefined;
+    const atmosphereMetrics = atmosphereVariantPixels && !args.proofDir
+      ? assertAtmosphereMetrics(atmosphereVariantPixels, pixels, size[0], size[1])
       : undefined;
     if (aaModePixels && process.env.VGPU_AA_MODE_OUTPUT_DIR) {
       await writeAaModePngs(aaModePixels, size, path.basename(output, '.png').replace('anti-aliasing.', ''));
@@ -132,12 +137,13 @@ async function renderOne(renderers, example, size, metaThumb, output) {
     const diagnosticMode = args.fluidDrag || args.fluidSoak;
     const requiredVariance = args.proofDir ? 2 : (slug === 'fluid' ? 120 : slug === 'fft-ocean' ? 0.5 : minLumaVariance);
     if (!diagnosticMode && variance < requiredVariance) throw new Error(`${slug} rendered an empty-looking thumbnail: luma variance ${variance.toFixed(2)} < ${requiredVariance}.`);
-    const compare = args.proofDir
-      ? (await writePng(output, pixels, size[0], size[1]), { status: 'proof', ratio: 0 })
+    // Proofs and previews are written as-is: neither is a baseline, so there is nothing to compare.
+    const compare = args.proofDir || args.previewDir
+      ? (await writePng(output, pixels, size[0], size[1]), { status: args.proofDir ? 'proof' : 'preview', ratio: 0 })
       : await comparePngSnapshot(output, pixels, size[0], size[1], { ...compareOptions, update: args.update && !diagnosticMode });
     await persistComparisonArtifacts(compare, pixels, size, output);
     const info = await stat(output).catch(() => undefined);
-    return { compare, variance, bytes: info?.size ?? 0, aaMetrics, blackHoleMetrics, raymarchedFractalMetrics, fftOceanMetrics, fluidMetrics, fluidState, radianceStats };
+    return { compare, variance, bytes: info?.size ?? 0, aaMetrics, blackHoleMetrics, raymarchedFractalMetrics, fftOceanMetrics, atmosphereMetrics, fluidMetrics, fluidState, radianceStats };
   } finally {
     gpu.dispose();
   }
@@ -168,6 +174,43 @@ function lumaVariance(bytes) {
   }
   const mean = sum / count;
   return sumSq / count - mean * mean;
+}
+
+/**
+ * Physical sanity checks on the golden-hour poster and its noon variant:
+ * the noon zenith is blue, the golden-hour horizon is warmer than the noon horizon, and the sun moved the sky.
+ */
+function assertAtmosphereMetrics(variantPixels, poster, width, height) {
+  const noon = variantPixels.get('noon');
+  if (!noon) throw new Error('Atmosphere validation did not capture the noon variant.');
+  const band = (pixels, y0, y1) => {
+    const sum = [0, 0, 0];
+    let count = 0;
+    for (let y = Math.floor(y0 * height); y < Math.floor(y1 * height); y++) for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      sum[0] += pixels[i]; sum[1] += pixels[i + 1]; sum[2] += pixels[i + 2];
+      count++;
+    }
+    return sum.map((v) => v / count);
+  };
+  let changed = 0;
+  for (let i = 0; i < poster.length; i += 4) {
+    if (Math.abs(poster[i] - noon[i]) + Math.abs(poster[i + 1] - noon[i + 1]) + Math.abs(poster[i + 2] - noon[i + 2]) > 24) changed++;
+  }
+  const noonZenith = band(noon, 0, 0.1);
+  const noonHorizon = band(noon, 0.36, 0.44);
+  const goldenHorizon = band(poster, 0.36, 0.44);
+  const metrics = {
+    noonZenithBlue: noonZenith[2] / Math.max(1, noonZenith[0]),
+    goldenWarmth: (goldenHorizon[0] - goldenHorizon[2]) - (noonHorizon[0] - noonHorizon[2]),
+    changedRatio: changed / (poster.length / 4),
+  };
+  const problems = [];
+  if (metrics.noonZenithBlue < 1.25) problems.push(`noon zenith blue/red ratio ${metrics.noonZenithBlue.toFixed(2)} (need >=1.25)`);
+  if (metrics.goldenWarmth < 15) problems.push(`golden-hour horizon warmth ${metrics.goldenWarmth.toFixed(1)} (need >=15 more red-minus-blue than the noon horizon)`);
+  if (metrics.changedRatio < 0.5) problems.push(`sun move changed only ${(metrics.changedRatio * 100).toFixed(1)}% of pixels (need >=50%)`);
+  if (problems.length) throw new Error(`Atmosphere validation failed (${width}x${height}):\n${problems.map((x) => `- ${x}`).join('\n')}`);
+  return metrics;
 }
 
 function assertFluidState(stats) {
@@ -487,8 +530,10 @@ async function loadRenderers(slugs) {
     platform: 'node',
     format: 'esm',
     sourcemap: false,
-    external: ['pngjs', 'vgpu', 'vgpu/node'],
-    plugins: [typegpu(), wgslPlugin()],
+    // Let Node load cannon-es's CommonJS entry (and its perf_hooks require) normally.
+    // Inlining it into this ESM bundle would need a global require shim.
+    external: ['pngjs', 'vgpu', 'vgpu/node', 'cannon-es'],
+    plugins: docsRendererPlugins(),
     logLevel: 'silent',
   });
   const module = await import(pathToFileURL(rendererBundle).href);
@@ -500,19 +545,6 @@ async function loadRenderers(slugs) {
     acc[slug] = renderer;
     return acc;
   }, /** @type {Record<string, Function>} */ ({}));
-}
-
-function wgslPlugin() {
-  return {
-    name: 'docs-wgsl',
-    setup(build) {
-      build.onLoad({ filter: /\.wgsl$/ }, async (args) => {
-        const source = await readFile(args.path, 'utf8');
-        const result = await transformWgsl({ source, id: args.path });
-        return { contents: result.code, loader: 'js', resolveDir: path.dirname(args.path) };
-      });
-    },
-  };
 }
 
 async function loadDocsData() {
@@ -543,7 +575,7 @@ async function loadDocsData() {
 }
 
 function parseArgs(argv) {
-  const parsed = { update: false, check: false, only: undefined, fluidDrag: false, fluidSoak: false, proofDir: undefined, artifactDir: undefined };
+  const parsed = { update: false, check: false, only: undefined, fluidDrag: false, fluidSoak: false, proofDir: undefined, previewDir: undefined, artifactDir: undefined };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--') continue;
@@ -553,11 +585,14 @@ function parseArgs(argv) {
     else if (arg === '--fluid-drag') parsed.fluidDrag = true;
     else if (arg === '--fluid-soak') parsed.fluidSoak = true;
     else if (arg === '--proof-dir') parsed.proofDir = argv[++i];
+    // Full-size card/hero renders written outside public/examples, for judging a thumbnail locally.
+    else if (arg === '--preview-dir') parsed.previewDir = argv[++i];
     else if (arg === '--artifact-dir') parsed.artifactDir = path.resolve(argv[++i]);
     else throw new Error(`Unknown argument '${arg}'.`);
   }
   if (parsed.proofDir && parsed.artifactDir) throw new Error('--artifact-dir is only valid for baseline comparison.');
   if (parsed.proofDir && (parsed.update || parsed.check)) throw new Error('--proof-dir cannot be combined with --update/--check.');
+  if (parsed.previewDir && (parsed.proofDir || parsed.update || parsed.check || parsed.artifactDir)) throw new Error('--preview-dir cannot be combined with --proof-dir, --update, --check or --artifact-dir.');
   if (parsed.update && parsed.check) throw new Error('Use either --update or --check, not both.');
   return parsed;
 }

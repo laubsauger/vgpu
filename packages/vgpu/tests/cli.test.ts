@@ -23,8 +23,12 @@ const routerHelp = `vgpu ${packageVersion}
 TypeScript library for WebGPU: typed shader imports, a tiny gpu-first API, and
 the same code running in the browser, headless Node, and your test suite.
 
-## Read the docs
-  npx vgpu docs cat getting-started.md    The guide for using the current API correctly
+## Run this first
+  npx vgpu docs cat getting-started.md
+  Always read this when working with vgpu, do not skip.
+  It is short and covers the API, project setup, and what to do before a PR.
+
+## Find anything else in the docs
   npx vgpu docs find "<topic | symbol | VGPU-error-code>"
   npx vgpu docs cat <path>
 
@@ -42,6 +46,9 @@ the same code running in the browser, headless Node, and your test suite.
 
 ## Node rendering environment
   npx vgpu doctor
+
+## Native Metal tooling
+  npx vgpu native --help
 `;
 
 test("routes the bare command and --help/-h to the docs-first guide, exit 0", () => {
@@ -269,6 +276,11 @@ test("routes the dogfood queries to the page that answers them", () => {
     ["depth buffer canvas", "/guides/two-pass-rendering.docs.md"],
     ["composite scene to canvas", "/guides/two-pass-rendering.docs.md"],
     ["render to texture", "/guides/two-pass-rendering.docs.md"],
+    ["scene composition", "/guides/scene-composition.docs.md"],
+    ["external ECS", "/guides/scene-composition.docs.md"],
+    ["camera uniform", "/guides/scene-composition.docs.md"],
+    ["instanceGeometry", "/vgpu/scene/gpu/instance-geometry.docs.md"],
+    ["orbitRig", "/vgpu/scene/camera-state.docs.md"],
   ];
 
   for (const [query, expected] of cases) {
@@ -308,8 +320,11 @@ test("caps the low-signal 'a' query with a notice", () => {
 });
 
 test("does not add a notice when the route-hit count is under the cap", () => {
-  const out = success(["docs", "find", "Buffer"]);
-  expect(out).toContain("Buffer\tvgpu/core");
+  // "Buffer" now legitimately matches more than 20 native and JavaScript guides.
+  // Use the specific symbol to exercise the under-cap branch as the corpus grows.
+  const out = success(["docs", "find", "BufferOptions"]);
+  expect(out).toContain("BufferOptions\tvgpu/core");
+  expect(out.trimEnd().split("\n").length).toBeLessThanOrEqual(20);
   expect(out).not.toMatch(/showing the 20 best/);
 });
 

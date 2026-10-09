@@ -22,6 +22,10 @@ export const exampleThumbs: Record<string, ExampleThumbPresence> = {
     "card": "/examples/anti-aliasing.card.png",
     "hero": "/examples/anti-aliasing.hero.png"
   },
+  "atmosphere": {
+    "card": "/examples/atmosphere.card.png",
+    "hero": "/examples/atmosphere.hero.png"
+  },
   "batch-rendering": {
     "card": "/examples/batch-rendering.card.png",
     "hero": "/examples/batch-rendering.hero.png"
@@ -62,17 +66,49 @@ export const exampleThumbs: Record<string, ExampleThumbPresence> = {
     "card": "/examples/glass-fractal.card.png",
     "hero": "/examples/glass-fractal.hero.png"
   },
+  "glass-sculpture": {
+    "card": "/examples/glass-sculpture.card.png",
+    "hero": "/examples/glass-sculpture.hero.png"
+  },
   "gradient": {
     "card": "/examples/gradient.card.png",
     "hero": "/examples/gradient.hero.png"
+  },
+  "holographic-card": {
+    "card": "/examples/holographic-card.card.png",
+    "hero": "/examples/holographic-card.hero.png"
   },
   "instanced-rendering": {
     "card": "/examples/instanced-rendering.card.png",
     "hero": "/examples/instanced-rendering.hero.png"
   },
+  "kinetic-sculpture": {
+    "card": "/examples/kinetic-sculpture.card.png",
+    "hero": "/examples/kinetic-sculpture.hero.png"
+  },
+  "liquid-layout": {
+    "card": "/examples/liquid-layout.card.png",
+    "hero": "/examples/liquid-layout.hero.png"
+  },
+  "marble-machine": {
+    "card": "/examples/marble-machine.card.png",
+    "hero": "/examples/marble-machine.hero.png"
+  },
+  "matcap": {
+    "card": "/examples/matcap.card.png",
+    "hero": "/examples/matcap.hero.png"
+  },
+  "mechanical-garden": {
+    "card": "/examples/mechanical-garden.card.png",
+    "hero": "/examples/mechanical-garden.hero.png"
+  },
   "mnist-classifier": {
     "card": "/examples/mnist-classifier.card.png",
     "hero": "/examples/mnist-classifier.hero.png"
+  },
+  "modular-city": {
+    "card": "/examples/modular-city.card.png",
+    "hero": "/examples/modular-city.hero.png"
   },
   "nextjs-flare": {
     "card": "/examples/nextjs-flare.card.png",
@@ -94,6 +130,14 @@ export const exampleThumbs: Record<string, ExampleThumbPresence> = {
     "card": "/examples/raymarched-fractal.card.png",
     "hero": "/examples/raymarched-fractal.hero.png"
   },
+  "spiral-galaxy": {
+    "card": "/examples/spiral-galaxy.card.png",
+    "hero": "/examples/spiral-galaxy.hero.png"
+  },
+  "spring-choreography": {
+    "card": "/examples/spring-choreography.card.png",
+    "hero": "/examples/spring-choreography.hero.png"
+  },
   "three-tsl": {
     "card": "/examples/three-tsl.card.png",
     "hero": "/examples/three-tsl.hero.png"
@@ -113,5 +157,9 @@ export const exampleThumbs: Record<string, ExampleThumbPresence> = {
   "typegpu-liquid-glass": {
     "card": "/examples/typegpu-liquid-glass.card.png",
     "hero": "/examples/typegpu-liquid-glass.hero.png"
+  },
+  "video-to-texture": {
+    "card": "/examples/video-to-texture.card.png",
+    "hero": "/examples/video-to-texture.hero.png"
   }
 };

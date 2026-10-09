@@ -1,8 +1,8 @@
 import { expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { createMockAdapter, init, frame, target, visibility } from "../src/mock.ts";
-import { timer, type TimerFrameExtent } from "../src/timer.ts";
-import type { Frame } from "../src/frame.ts";
+import { timer } from "../src/timer.ts";
+import type { TimerFrameExtent } from "../src/timer.ts";
 
 function initWithTimestampQuery() {
   return init({ adapter: createMockAdapter({ features: ["timestamp-query"] }), requiredFeatures: ["timestamp-query"] });
@@ -111,46 +111,6 @@ test("onResults fires with decoded millisecond values from the mock's fake times
   gpu.dispose();
 });
 
-test("onResults hands the frame's extent beside the spans: earliest begin to latest end, tied to the submitted Frame", async () => {
-  const gpu = await initWithTimestampQuery();
-  const gpuTimer1 = timer(gpu);
-  const shadowMap = target(gpu, { size: [4, 4] });
-  const scene = target(gpu, { size: [4, 4] });
-  const received: Array<{ spans: Readonly<Record<string, number>>; extent: TimerFrameExtent }> = [];
-  gpuTimer1.onResults((spans, extent) => { received.push({ spans, extent }); });
-
-  let submitted: Frame | undefined;
-  frame(gpu, (currentFrame) => {
-    submitted = currentFrame;
-    currentFrame.pass({ target: shadowMap, timer: gpuTimer1.span("shadows") }, () => undefined);
-    currentFrame.pass({ target: scene, timer: gpuTimer1.span("main") }, () => undefined);
-  });
-  await gpu.settled();
-
-  // Mock timestamps: query i -> i*i ms. Spans are (0,1) = 1 ms and (2,3) = 5 ms; the frame runs
-  // from query 0 to query 3 = 9 ms. The gap between the passes is real frame time the spans do not
-  // add up to (1 + 5 = 6), which is what the extent is for.
-  expect(received).toHaveLength(1);
-  expect(received[0]!.spans).toEqual({ shadows: 1, main: 5 });
-  expect(received[0]!.extent.extentMs).toBe(9);
-  expect(received[0]!.extent.frame).toBe(submitted);
-  expect(Object.isFrozen(received[0]!.extent)).toBe(true);
-
-  // A single-span frame has an extent equal to its span, and each frame's extent names its own Frame.
-  let second: Frame | undefined;
-  frame(gpu, (currentFrame) => {
-    second = currentFrame;
-    currentFrame.pass({ target: scene, timer: gpuTimer1.span("main") }, () => undefined);
-  });
-  await gpu.settled();
-  expect(received).toHaveLength(2);
-  expect(received[1]!.extent.extentMs).toBe(received[1]!.spans.main);
-  expect(received[1]!.extent.frame).toBe(second);
-  expect(received[1]!.extent.frame).not.toBe(submitted);
-  gpuTimer1.dispose();
-  gpu.dispose();
-});
-
 test("results keep flowing frame after frame", async () => {
   const gpu = await initWithTimestampQuery();
   const gpuTimer1 = timer(gpu);
@@ -167,6 +127,86 @@ test("results keep flowing frame after frame", async () => {
   gpuTimer1.dispose();
   gpu.dispose();
 });
+
+test.each([
+  { name: "separated intervals", ticks: [10, 12, 20, 24], durations: [2, 4], extentMs: 14 },
+  { name: "nested intervals", ticks: [10, 20, 12, 18], durations: [10, 6], extentMs: 10 },
+  { name: "reversed and equal pairs beside a valid interval", ticks: [50, 40, 3, 3, 10, 12], durations: [0, 0, 2], extentMs: 2 },
+  { name: "no valid intervals", ticks: [50, 40, 3, 3], durations: [0, 0], extentMs: 0 },
+  { name: "one valid interval", ticks: [8, 11], durations: [3], extentMs: 3 },
+])("onResults reports the valid timed extent for $name", async ({ ticks, durations, extentMs }) => {
+  const gpu = await initWithTimestampQuery();
+  try {
+    // Replace native staging readback bytes, preserving the public timer/frame path.
+    const timestamps = BigUint64Array.from(ticks, tick => BigInt(tick) * 1_000_000n);
+    configureStagingBuffers(gpu.gpu, buffer => {
+      vi.spyOn(buffer, "getMappedRange").mockImplementation(() => timestamps.slice().buffer);
+    });
+    const clock = timer(gpu);
+    const color = target(gpu, { size: [4, 4] });
+    const received: Array<{ spans: Readonly<Record<string, number>>; extent: TimerFrameExtent }> = [];
+    clock.onResults((spans, extent) => received.push({ spans, extent }));
+    const submitted = frame(gpu, current => {
+      for (let index = 0; index < durations.length; index++) {
+        current.pass({ target: color, timer: clock.span(`pass${index}`) }, () => undefined);
+      }
+    });
+    await gpu.settled();
+
+    expect(received).toHaveLength(1);
+    expect(Object.values(received[0]!.spans)).toEqual(durations);
+    expect(received[0]!.extent).toEqual({ extentMs, frame: submitted });
+    expect(Object.isFrozen(received[0]!.spans)).toBe(true);
+    expect(Object.isFrozen(received[0]!.extent)).toBe(true);
+    if (ticks.length === 4 && durations.every(duration => duration > 0)) {
+      expect(extentMs).not.toBe(durations.reduce((sum, duration) => sum + duration, 0));
+    }
+  } finally {
+    gpu.dispose();
+    vi.restoreAllMocks();
+  }
+});
+
+test("a delayed result keeps its submitted frame identity after another frame opens", async () => {
+  const gpu = await initWithTimestampQuery();
+  const releaseMaps: Array<() => void> = [];
+  try {
+    configureStagingBuffers(gpu.gpu, buffer => {
+      vi.spyOn(buffer, "mapAsync").mockImplementation(() => new Promise<void>(resolve => releaseMaps.push(resolve)));
+    });
+    const clock = timer(gpu);
+    const color = target(gpu, { size: [4, 4] });
+    const received: TimerFrameExtent[] = [];
+    clock.onResults((_spans, extent) => received.push(extent));
+    const first = frame(gpu, current => current.pass({ target: color, timer: clock.span("first") }, () => undefined));
+    const second = frame(gpu, current => current.pass({ target: color, timer: clock.span("second") }, () => undefined));
+    expect(received).toEqual([]);
+    expect(releaseMaps).toHaveLength(2);
+
+    releaseMaps[0]!();
+    await vi.waitFor(() => expect(received).toHaveLength(1));
+    expect(received[0]!.frame).toBe(first);
+    expect(received[0]!.frame).not.toBe(second);
+    releaseMaps[1]!();
+    await gpu.settled();
+    expect(received.map(extent => extent.frame)).toEqual([first, second]);
+  } finally {
+    for (const release of releaseMaps) release();
+    await gpu.settled();
+    gpu.dispose();
+    vi.restoreAllMocks();
+  }
+});
+
+/** Configures native mock staging buffers before the timer allocates its query ring. */
+function configureStagingBuffers(device: GPUDevice, configure: (buffer: GPUBuffer) => void): void {
+  const create = device.createBuffer.bind(device);
+  vi.spyOn(device, "createBuffer").mockImplementation(descriptor => {
+    const buffer = create(descriptor);
+    if (descriptor.label?.includes("staging")) configure(buffer);
+    return buffer;
+  });
+}
 
 test("a duplicate span name within one frame throws at pass time", async () => {
   const gpu = await initWithTimestampQuery();

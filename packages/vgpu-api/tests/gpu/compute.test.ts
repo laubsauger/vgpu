@@ -1,3 +1,4 @@
+import { prepareShader } from "@vgpu/wgsl/prepare";
 import { describe, expect, test } from "vitest";
 import { init, compute, effect, frame, pingPong, pingPongStorage } from "../../src/node.ts";
 
@@ -28,7 +29,7 @@ describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("Lane C GPU compute + ping
     try {
       const COUNT = 4;
       const dt = 0.125;
-      const sim = compute(gpu, GRAVITY_COMPUTE, { label: "gravity" });
+      const sim = compute(gpu, prepareShader(GRAVITY_COMPUTE), { label: "gravity" });
       const buffers = pingPongStorage(gpu, COUNT * 16);
       const initial = new Float32Array([
         0, 10, 0, 1,
@@ -58,7 +59,7 @@ describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("Lane C GPU compute + ping
     const gpu = await init();
     try {
       const pair = pingPong(gpu, 4, 4, { format: "rgba8unorm", label: "pingpong" });
-      const feedback = effect(gpu, PING_PONG_PASS, { label: "feedback" });
+      const feedback = effect(gpu, prepareShader(PING_PONG_PASS), { label: "feedback" });
       for (let currentFrame = 0; currentFrame < 4; currentFrame += 1) {
         frame(gpu, (f) => {
           f.pass({ target: pair.write, clear: [0, 0, 0, 1] }, (p) => {
@@ -68,7 +69,7 @@ describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("Lane C GPU compute + ping
         });
         pair.swap();
       }
-      const pixels = await pair.read.read();
+      const pixels = await pair.read.color.read({ mipLevel: 0, region: "all" });
       const pixel = pixels.slice(0, 4);
       expect(pixel[0]).toBeGreaterThan(240);
       expect(pixel[3]).toBe(255);

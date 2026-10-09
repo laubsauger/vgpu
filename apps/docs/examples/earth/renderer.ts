@@ -12,7 +12,7 @@ import {
   surface,
   target,
 } from "vgpu";
-import { perspectiveCamera, sphere } from "vgpu/scene";
+import { sphere } from "vgpu/scene";
 
 import {
   EARTH_TUNING,
@@ -23,6 +23,7 @@ import {
   sunDirection,
   type OrbitState,
 } from "./planet";
+import { cameraMatrices } from "./camera";
 
 import atmosphereWgsl from "./atmosphere.wgsl";
 import bakeCloudsWgsl from "./bake-clouds.wgsl";
@@ -286,6 +287,7 @@ export function setStaticBindings(
     pass.set({
       samp: scene.linearSampler,
       blur: {
+        texelSize: (index % 2 === 0 ? targets.bloomA : targets.bloomB).texelSize,
         direction: directions[index % 2]!,
         radius: bloom.radii[Math.floor(index / 2)],
       },
@@ -356,7 +358,7 @@ export function setFrameUniforms(
   const aspect = size[0] / Math.max(1, size[1]);
   const position = orbitPosition(orbit);
   const light = sunDirection(sunDegrees);
-  const view = perspectiveCamera({
+  const view = cameraMatrices({
     fov: camera.fov,
     aspect,
     near: camera.near,

@@ -17,7 +17,7 @@ interface TimerSpan {
 
 interface TimerFrameExtent {
   readonly extentMs: number;
-  readonly frame: Frame;
+  readonly frame: object;
 }
 
 type TimerResultsListener = (spans: Readonly<Record<string, number>>, extent: TimerFrameExtent) => void;
@@ -35,7 +35,7 @@ interface Timer {
 |---|---|---:|---|---|
 | timer() | — | — | — | No parameters. |
 | timer.span.name | `string` | ✔ | — | Non-empty result key. Spans are memoized per name, so `timer.span("shadows")` is allocation-free in hot loops. |
-| timer.onResults.cb | `TimerResultsListener` | ✔ | — | Receives one frozen `name → milliseconds` record per timed frame, and a frozen `TimerFrameExtent` for that frame: `extentMs` is the earliest span begin to the latest span end, `frame` is the `Frame` the spans were attached to. |
+| timer.onResults.cb | `TimerResultsListener` | ✔ | — | Receives a frozen `name → milliseconds` record and frozen extent metadata for the same submitted frame. Existing one-argument listeners remain valid. |
 
 **Returns:** `timer(gpu)` returns `Timer`; `span()` returns a `TimerSpan` to pass as `FramePassOptions.timer`; `onResults()` returns an unsubscribe function; `dispose()` returns `void`.
 
@@ -52,16 +52,17 @@ interface Timer {
 
 ```ts
 import { init, createMockAdapter, effect, frameLoop, target, timer } from "vgpu/mock";
+import { prepareShader } from "@vgpu/wgsl/prepare";
 
 const gpu = await init({ adapter: createMockAdapter({ features: ["timestamp-query"] }), requiredFeatures: ["timestamp-query"] });
 const shadowMap = target(gpu, { size: [512, 512], depth: true });
 const scene = target(gpu, { size: [256, 256], depth: true });
-const casters = effect(gpu, `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(0); }`);
-const world = effect(gpu, `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }`);
+const casters = effect(gpu, prepareShader(`@fragment fn fs_main() -> @location(0) vec4f { return vec4f(0); }`));
+const world = effect(gpu, prepareShader(`@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }`));
 
 const gpuTimer = timer(gpu);
 gpuTimer.onResults((spans, { extentMs }) => {
-  console.log(`shadows ${spans.shadows}ms, main ${spans.main}ms, frame ${extentMs}ms`);
+  console.log(`shadows ${spans.shadows}ms, main ${spans.main}ms, timed extent ${extentMs}ms`);
 });
 
 const loop = frameLoop(gpu, (f) => {
@@ -84,7 +85,8 @@ gpuTimer?.onResults((spans) => console.table(spans));
 
 - Start with a `Timer` before optimizing a suspected bottleneck: CPU wall-clock timings measure submission/encoding, not GPU execution. Results are asynchronous and normally arrive one to two frames after submit, so use them as a rolling signal rather than an immediate branch condition.
 - Results are GPU durations decoded from timestamp pairs: `(end - begin)` nanosecond ticks converted to milliseconds. Timestamp values are implementation-defined, and WebGPU notes the counter "may reset ... which can result in unexpected values such as negative deltas"; vgpu clamps negative deltas to `0` instead of reporting garbage.
-- Do not sum spans to get a frame time; read `extent.extentMs`. Spans only bracket their own pass, so the gaps between passes are missing from the sum, and on GPUs that sample timestamps at stage boundaries (Apple GPUs under Metal, for one) every pass's begin lands near the start of the command buffer while the ends are sequential — the spans nest and their sum overstates the frame by ~(N+1)/2. The extent is the earliest begin to the latest end across the frame's spans, from the same raw timestamps; a pair clamped to `0` is left out of it. `extent.frame` is the `Frame` that submitted, for callers that track several.
+- `extent.extentMs` measures the earliest valid span begin to the latest valid span end. Gaps between those endpoints are included; overlapping spans are counted once. Summing span durations gives a different number when passes overlap or have gaps. This is the **timed extent**, not total GPU busy time, queue latency, or untimed work outside the endpoints. Reversed or equal timestamp pairs contribute no interval; when no pair is valid, the extent is `0`.
+- `extent.frame` is the opaque identity of the submitted `Frame`, captured before asynchronous readback. Compare it with the frame you submitted to associate delayed results with your own frame metadata. Listeners that only consume `spans` require no changes.
 - Readback never blocks a frame: results resolve through rotated staging buffers, and when readbacks lag more frames than the ring holds, that frame's results are dropped rather than awaited. A dropped frame is dropped **whole** — no resolve is encoded at all, `onResults` simply does not fire for it, and nothing is merged or partially applied; the next frame that finds a free staging buffer reports again. `await gpu.settled()` covers pending readbacks for deterministic tests and teardown.
 - One timer can be used from several frames that are open at the same time, but results stay scoped to the newest one: opening a frame retargets the timer's per-frame bookkeeping, so an older frame submitted afterwards encodes no resolve and reports nothing (its spans are dropped, never merged into the newer frame's results). Submitting it is always safe, however long it stayed open — the query set it referenced is kept alive for it.
 - A manual `frame(gpu)` that attached a span holds the timer's query set until you `submit()` or `cancel()` it (a `frame(gpu, cb)` whose callback throws is canceled and releases it too). Dropping such a frame without either leaks those resources for the lifetime of the gpu — the same leak as a native `GPUCommandEncoder` you never `finish()` — because a frame is never assumed abandoned: it could still be submitted. Always close the frames you open — `submit()` them, or `frame.cancel()` the ones you decided not to submit, which releases the query set without encoding a resolve or reporting a result — or let `frame(gpu, cb)` do it for you; `gpu.dispose()` (or device loss) is the backstop.
