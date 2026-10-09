@@ -4,11 +4,12 @@ Browser tests should exercise the same public API users copy: `init()`, `surface
 
 ```text
 import { init } from "vgpu";
+import waveShader from "./wave.wgsl"; // prepared at build time by the @vgpu/wgsl loader
 
 export async function renderOnce(canvas: HTMLCanvasElement) {
   const gpu = await init();
   const surface = surface(gpu, canvas, { dpr: 1, autoResize: false });
-  const effect = effect(gpu, WGSL, { set: { time: 0, texel: surface.texelSize } });
+  const effect = effect(gpu, waveShader, { set: { time: 0, texel: surface.texelSize } });
   frame(gpu, (f) => f.pass({ target: surface, clear: [0, 0, 0, 1] }, (p) => p.draw(effect)));
   return gpu;
 }
@@ -18,6 +19,6 @@ export async function renderOnce(canvas: HTMLCanvasElement) {
 
 - Use fixed DPR/size (`dpr: 1`, `autoResize: false`, or explicit `size`) for pixel snapshots.
 - Submit with `frame(gpu, ...)` for one deterministic frame, not `requestAnimationFrame` loops.
-- Read from explicit surfaces or offscreen targets with `target.read()`.
+- Read from explicit surfaces or offscreen targets with `target.color.read({ mipLevel: 0, region: "all" })`.
 - Keep WGSL imports pure: modules export helpers only; bindings live in the entry shader. If a module declares a binding, fix `VGPU-RESOLVE-MODULE-BINDING`.
 - For headless tests use `vgpu/mock` for deterministic unit tests and `vgpu/node` only when Dawn/WebGPU behavior is under test.

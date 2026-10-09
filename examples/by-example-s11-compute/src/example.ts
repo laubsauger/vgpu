@@ -1,4 +1,5 @@
-import { init, compute } from "vgpu/node";
+import { prepareShader } from "@vgpu/wgsl/prepare";
+import { init, compute, frame } from "vgpu/node";
 
 export const SIM = /* wgsl */ `
 struct Sim { dt: f32 }
@@ -10,14 +11,16 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   dst[id.x] = src[id.x] + vec4f(0.0, -9.8 * sim.dt, 0.0, 0.0);
 }
 `;
+const SIM_SHADER = prepareShader(SIM, "by-example-s11-compute.wgsl");
 
 export async function runComputeExample() {
   const gpu = await init();
   const src = gpu.device.createBuffer({ size: 16, usage: ["storage", "copy_dst", "copy_src"], label: "src" });
   const dst = gpu.device.createBuffer({ size: 16, usage: ["storage", "copy_dst", "copy_src"], label: "dst" });
   src.write(new Float32Array([1, 2, 3, 4]));
-  const sim = compute(gpu, SIM, { label: "sim" });
+  const sim = compute(gpu, SIM_SHADER, { label: "sim" });
   sim.set({ dt: 0.5, src, dst });
-  sim.dispatch(1);
+  await sim.compile();
+  frame(gpu, f => f.computePass(pass => pass.dispatch(sim, 1)));
   return { gpu, dst };
 }

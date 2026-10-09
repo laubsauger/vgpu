@@ -1,3 +1,4 @@
+import { prepareShader } from "@vgpu/wgsl/prepare";
 import { expect, test } from "vitest";
 import { init, effect, frame, target } from "../../src/node.ts";
 
@@ -20,14 +21,14 @@ test.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("additive blend accumulates re
   const gpu = await init();
   try {
     const colorTarget = target(gpu, { size: [2, 2], format: "rgba8unorm" });
-    const additive = effect(gpu, FULLSCREEN_RED, { label: "additive", blend: "additive" });
+    const additive = effect(gpu, prepareShader(FULLSCREEN_RED), { label: "additive", blend: "additive" });
 
     frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget, clear: [0, 0, 0, 1] }, (pass) => {
       pass.draw(additive);
       pass.draw(additive);
     }));
 
-    const px = await colorTarget.read();
+    const px = await colorTarget.color.read({ mipLevel: 0, region: "all" });
     expect(px[0]).toBeGreaterThanOrEqual(126);
     expect(px[0]).toBeLessThanOrEqual(129);
     expect(px[1]).toBe(0);
@@ -41,11 +42,11 @@ test.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("writeMask can preserve alpha 
   const gpu = await init();
   try {
     const colorTarget = target(gpu, { size: [2, 2], format: "rgba8unorm" });
-    const rgbOnly = effect(gpu, FULLSCREEN_ALPHA, { label: "rgb-only", writeMask: ["r", "g", "b"] });
+    const rgbOnly = effect(gpu, prepareShader(FULLSCREEN_ALPHA), { label: "rgb-only", writeMask: ["r", "g", "b"] });
 
     frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget, clear: [0, 0, 0, 0.5] }, (pass) => pass.draw(rgbOnly)));
 
-    const px = await colorTarget.read();
+    const px = await colorTarget.color.read({ mipLevel: 0, region: "all" });
     expect(px[0]).toBe(255);
     expect(px[1]).toBe(0);
     expect(px[2]).toBe(0);
@@ -60,14 +61,14 @@ test.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("MSAA target resolves additive
   const gpu = await init();
   try {
     const colorTarget = target(gpu, { size: [2, 2], format: "rgba8unorm", msaa: true });
-    const additive = effect(gpu, FULLSCREEN_RED, { label: "msaa-additive", blend: "additive" });
+    const additive = effect(gpu, prepareShader(FULLSCREEN_RED), { label: "msaa-additive", blend: "additive" });
 
     frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget, clear: [0, 0, 0, 1] }, (pass) => {
       pass.draw(additive);
       pass.draw(additive);
     }));
 
-    const px = await colorTarget.read();
+    const px = await colorTarget.color.read({ mipLevel: 0, region: "all" });
     expect(px[0]).toBeGreaterThanOrEqual(126);
     expect(px[0]).toBeLessThanOrEqual(129);
     expect(px[1]).toBe(0);
@@ -81,12 +82,12 @@ test.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("clear false preserves offscre
   const gpu = await init();
   try {
     const colorTarget = target(gpu, { size: [4, 2], format: "rgba8unorm" });
-    const halfGreen = effect(gpu, HALF_GREEN, { label: "half-green" });
+    const halfGreen = effect(gpu, prepareShader(HALF_GREEN), { label: "half-green" });
 
     frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget, clear: [1, 0, 0, 1] }, () => undefined));
     frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget, clear: false }, (pass) => pass.draw(halfGreen)));
 
-    const px = await colorTarget.read();
+    const px = await colorTarget.color.read({ mipLevel: 0, region: "all" });
     const left = 0;
     const right = (4 - 1) * 4;
     expect([...px.slice(left, left + 4)]).toEqual([0, 255, 0, 255]);

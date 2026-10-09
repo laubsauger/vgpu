@@ -1,5 +1,158 @@
 # @vgpu/core
 
+## 0.6.0-rc.2
+
+### Patch Changes
+
+- @vgpu/wgsl@0.6.0-rc.2
+
+## 0.6.0-rc.1
+
+### Patch Changes
+
+- Updated dependencies [d5ea651]
+- Updated dependencies [a5833da]
+  - @vgpu/wgsl@0.6.0-rc.1
+
+## 0.6.0-rc.0
+
+### Patch Changes
+
+- 7cb11d3: Unify compute and render pipeline preparation with lazy compute compilation, `Compute.compile()` / `compileSync()`, and frame-owned `computePass()` dispatches. Capture managed uniform values per direct frame draw/dispatch. Surface native compute validation, validate dispatch counts and workgroup limits, and wait for synchronous pipeline validation before resolving asynchronous preparation.
+
+  [Migration guide](https://github.com/vercel-labs/vgpu/blob/v0.6.0-rc.0/docs/migrations/0.6.0.docs.md).
+
+- 333ccf3: `Gpu` now exposes `readonly lost: Promise<GPUDeviceLostInfo>`, a loss-only notification. The promise keeps one identity, never rejects, and resolves once with the native `GPUDeviceLostInfo` when vgpu observes native device loss while the gpu is active. vgpu stops every running `frameLoop` before `gpu.lost` handlers run, so no tick runs or throws after vgpu observes the loss. Loss does not dispose the gpu, destroy its resources, deliver anything to `gpu.onError`, or recover the device: create a new `Gpu` with `init()`, recreate its resources, and restart the loop.
+
+  `gpu.dispose()` remains your own teardown, not a loss. Disposing before vgpu observes a loss leaves `gpu.lost` pending; disposing after keeps its resolved value; disposing a gpu from `initFromDevice(device)` still never destroys the borrowed device. A borrowed device destroyed by its owner while the wrapper is active counts as a loss, with `reason: "destroyed"`. `gpu.settled()` never waits for `gpu.lost`.
+
+  After an observed loss, every factory, `clock(gpu)`, `frame(gpu)`, and `frameLoop(gpu, cb)` throw `VGPU-DEVICE-LOST` at the call, before the frame clock advances or surface auto-resize runs. A manual `frame(gpu)` that was open at the time is not canceled: its `submit()` still throws `VGPU-DEVICE-LOST` until `gpu.dispose()` cancels it. The `VGPU-DEVICE-LOST` error raised by `@vgpu/core` now carries the fix "Create a new Gpu with init(), then recreate its resources and restart the loop."
+
+  The implicit submit of `frame(gpu, cb)` and `frameLoop` ticks no longer swallows `VGPU-DEVICE-LOST` or `VGPU-DEVICE-DISPOSED`: any error it throws now escapes the call, and a loop tick that fails this way stops the loop and rethrows. Calling `gpu.dispose()` inside a callback still cancels the open frame, so its implicit submit stays a no-op.
+
+  [Migration guide](https://github.com/vercel-labs/vgpu/blob/v0.6.0-rc.0/docs/migrations/0.6.0.docs.md).
+
+- Updated dependencies [a617198]
+  - @vgpu/wgsl@0.6.0-rc.0
+
+## 0.5.0
+
+### Minor Changes
+
+- 588a94e: Unify texture creation around explicit shapes and usage, immutable allocations and explicit mip/region readback. Remove Texture.resize() and Target/Surface read delegates; improve replacement and resource lifetime validation.
+
+  [Migration guide](https://github.com/vercel-labs/vgpu/blob/v0.5.0/docs/migrations/0.5.0.docs.md).
+
+- 632a908: Add public `vgpu native doctor`, `check`, `build`, and `verify` command routing and
+  guides for generating self-contained Swift/Metal shader packages. Commands load
+  the optional companion lazily; help does not require it or a native toolchain.
+  The optional `@vgpu/native` companion is published as a beta in this release;
+  its platform and distribution qualifications remain unchanged from rc.1.
+
+  Expose captured WGSL source graphs and authored entry-point declaration spans for
+  consistent build-time validation and generation. Imports are resolved once per
+  captured graph, and snapshot resolution retains the captured source and edges.
+
+  Breaking changes for this pre-1.0 minor: reflected host-shareable layouts now use
+  intrinsic WGSL alignment and size, with `layoutMode: "wgsl-host-shareable-v1"`.
+  Read address space from the binding, not the removed
+  `HostShareableLayout.addressSpace` field. Code relying on the previous
+  `"naga-standard"` mode or padded uniform layout sizes must migrate.
+
+  JavaScript-owned binding values now require the reflected shape, exact component
+  counts, and in-range integers instead of silent coercion, truncation, or filling.
+  Invalid values produce `VGPU-SET-VALUE-INVALID` with structured reason/path and
+  expected/actual details. Binding ownership and stored values are retained when
+  candidate validation fails; this is a per-candidate guarantee, not an atomic
+  transaction across `set({ a, b })` or a rollback of arbitrary GPU errors. Shared
+  uniform updates preserve the previous accepted value on validation failure, and
+  half-float packing uses round-to-nearest, ties-to-even.
+
+  Migrate the rendered examples' initial uniform values to the strict contract:
+  provide every reflected member, including explicit shader padding, and use
+  actual render-target dimensions for initial resolution and bloom texel size.
+  Retain partial updates for animation and resizing without resetting their state.
+
+  The strict binding checks and candidate handling add approximately 1.4 KB gzip to
+  the measured full client entry; `init-only` is unchanged. The changed WGSL runtime
+  modules add approximately 2.8 KB gzip to the tooling entry. Captured-graph modules
+  are absent from the measured browser entries. Only the six affected package
+  bundle ceilings are updated to the existing 512-byte convention;
+  audiences, growth thresholds, and unrelated ceilings are unchanged.
+
+  [Migration guide](https://github.com/vercel-labs/vgpu/blob/v0.5.0/docs/migrations/0.5.0.docs.md).
+
+### Patch Changes
+
+- Updated dependencies [632a908]
+  - @vgpu/wgsl@0.5.0
+
+## 0.5.0-rc.1
+
+### Minor Changes
+
+- 632a908: Add public `vgpu native doctor`, `check`, `build`, and `verify` command routing and
+  guides for generating self-contained Swift/Metal shader packages. Commands load
+  the optional companion lazily; help does not require it or a native toolchain.
+  The `@vgpu/native` companion remains private and unpublished. This changeset does
+  not publish it or qualify a release compatibility matrix.
+
+  Expose captured WGSL source graphs and authored entry-point declaration spans for
+  consistent build-time validation and generation. Imports are resolved once per
+  captured graph, and snapshot resolution retains the captured source and edges.
+
+  Breaking changes for this pre-1.0 minor: reflected host-shareable layouts now use
+  intrinsic WGSL alignment and size, with `layoutMode: "wgsl-host-shareable-v1"`.
+  Read address space from the binding, not the removed
+  `HostShareableLayout.addressSpace` field. Code relying on the previous
+  `"naga-standard"` mode or padded uniform layout sizes must migrate.
+
+  JavaScript-owned binding values now require the reflected shape, exact component
+  counts, and in-range integers instead of silent coercion, truncation, or filling.
+  Invalid values produce `VGPU-SET-VALUE-INVALID` with structured reason/path and
+  expected/actual details. Binding ownership and stored values are retained when
+  candidate validation fails; this is a per-candidate guarantee, not an atomic
+  transaction across `set({ a, b })` or a rollback of arbitrary GPU errors. Shared
+  uniform updates preserve the previous accepted value on validation failure, and
+  half-float packing uses round-to-nearest, ties-to-even.
+
+  Migrate the rendered examples' initial uniform values to the strict contract:
+  provide every reflected member, including explicit shader padding, and use
+  actual render-target dimensions for initial resolution and bloom texel size.
+  Retain partial updates for animation and resizing without resetting their state.
+
+  The strict binding checks and candidate handling add approximately 1.4 KB gzip to
+  the measured full client entry; `init-only` is unchanged. The changed WGSL runtime
+  modules add approximately 2.8 KB gzip to the tooling entry. Captured-graph modules
+  are absent from the measured browser entries. Only the six affected package
+  bundle ceilings are updated to the existing 512-byte convention;
+  audiences, growth thresholds, and unrelated ceilings are unchanged.
+
+  This changeset requests the next minor; it does not assign or publish a version.
+
+  [Migration guide](https://github.com/vercel-labs/vgpu/blob/v0.5.0-rc.1/docs/migrations/0.5.0.docs.md).
+
+### Patch Changes
+
+- Updated dependencies [632a908]
+  - @vgpu/wgsl@0.5.0-rc.1
+
+## 0.5.0-rc.0
+
+### Minor Changes
+
+- 588a94e: Unify core and public texture creation around explicit `kind`, spatial `size`, array `layers`, and nonempty `usage`. Creation metadata is snapshotted and frozen; mip/sample allocation and additional view formats retain their explicit opt-ins.
+
+  Breaking changes for this pre-1.0 minor: remove `Texture.resize()` and Target/Surface read delegates. Select an attachment, then call `texture.read({ mipLevel: 0, region: "all" })` or `readFloats(options)`. Reads now include every selected layer/slice, support mip-relative crops, and validate usage, sample count, bounds and allocations. Buffer reads are unchanged.
+
+  Texture pairs and Targets prepare replacements before publishing them; synchronous preparation failures preserve the old generation. Destroyed tracked bindings fail early, and bundles capturing destroyed resources become stale. Raw native views retain native lifetime validation. Compute cache entries are isolated from draw entries even when they bind the same resource.
+
+  See `docs/texture-api-migration.md` in the repository for old/new creation, readback, metadata and replacement examples. This changeset requests the next minor; it does not publish or assign a release version.
+
+### Patch Changes
+
+- @vgpu/wgsl@0.5.0-rc.0
+
 ## 0.4.1
 
 ### Patch Changes

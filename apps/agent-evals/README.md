@@ -18,12 +18,17 @@ agent/sandbox/          boots a sandbox, installs those tarballs, gates on `vgpu
 agent/sandbox/tasks/    one seed project per task, copied into /workspace by bootstrap
 agent/                  a neutral coding agent (eve defaults: bash, read/write, glob, grep)
                         plus one generic `view-image` tool (see "The view-image tool")
+agent/skills/           task-scoped dynamic skills: the public vgpu skill resolves for
+                        scene-quaternion-keyframes only, null for every other task
 agent/hooks/            after every turn: run the task's verification, then tar /workspace
-                        back to .work/snapshots/<sessionId>/
+                        back to .work/snapshots/<sessionId>/ (scene tasks: archive first,
+                        then rerun, under .work/snapshots/<sessionId>/turns/<turnId>/<eventId>/)
 agent/lib/verify/       harness-side verification that needs the LIVE sandbox (n1 builds,
-                        serves and hovers the app itself). Never under agent/hooks/: eve
-                        auto-discovers every module there as a hook.
+                        serves and hovers the app itself; scene tasks rerun a fresh copy
+                        of the source). Never under agent/hooks/: eve auto-discovers every
+                        module there as a hook.
 evals/                  sends the task, then grades what came back out of that tar
+tests/                  node:test suites for the scene harness and grader; no model, network or GPU
 ```
 
 **One process runs exactly one task.** `defineSandbox`'s configuration is
@@ -48,6 +53,32 @@ own build copies the CLI out of it and its `prepack` generates the docs that
 | `s2-gradient` | a 128x128 red-to-blue gradient from `node render.mjs` | the PNG the agent left behind |
 | `n1-hero-shader` | a hover-trail background shader in a Next.js hero | a build/serve/hover pass the **harness** runs itself |
 | `view-image-smoke` | name the two colors in `known.png` | that the `view-image` tool really delivers pixels |
+| `n2-ship-hero` | a working, approved vgpu hero: "get it ready to merge", write `PR.md` | build + `vgpu check` by the **harness**; whether the agent found and followed the shipping-to-production guide |
+| `n3-explore-hero` | the same hero, "still exploring the look", one palette change | build + `vgpu check`; that the agent did **not** run the pre-PR checklist |
+| `scene-robot-arm` | a headless five-part arm renderer, then parent and joint edits | matrices and pixels from a harness rerun of the source on host-chosen poses |
+| `scene-shader-bindings` | three boxes through a supplied WGSL interface, then camera updates | the view-projection binding and image position across an `A, B, A` batch |
+| `scene-warehouse` | 2,304 boxes with a color and an application-ID pass, then delete/move/recolor | state, colors and IDs by stable `appId` across four frames |
+| `scene-math-interop` | integrate a supplied math-based ECS, then add spawning, deletion and reparenting | immutable ECS files, independent matrices and pixels; math-use conformance reviewed separately |
+| `scene-quaternion-keyframes` | a keyframed-rotation renderer with the public vgpu skill available, then endpoint clamping | independent rotation matrices and marker pixels; numerical-source choice observed, never graded |
+
+The three neutral scene tasks share a contract, a rerun verifier and a host grader. They are
+documented separately in [scene-evals.md](scene-evals.md); findings from lead-run pilots go in
+[scene-evals-findings.md](scene-evals-findings.md).
+The [explicit math interoperability task](scene-evals.md#scene-math-interop) has its own contract
+revision and requires the installed math package; it does not measure spontaneous adoption.
+Its completed two-session pilot has [findings](scene-math-interop-findings.md) and
+[machine-readable results](scene-math-interop-results.json).
+The completed math-guidance comparison has separate
+[findings](scene-math-evals-findings.md) and [machine-readable results](scene-math-evals-results.json).
+The [quaternion task](scene-evals.md#scene-quaternion-keyframes) is the only task
+that receives the public vgpu skill. It observes which numerical source the agent picks, grades
+correctness independently, and is neither unaided discovery nor an A/B estimate. Its completed
+two-session pilot has [findings](scene-math-discovery-findings.md) and
+[machine-readable results](scene-math-discovery-results.json), including the separately retained
+infrastructure attempt.
+
+The follow-up with the split `SKILL.md` / `scene.md` has
+[findings](scene-skill-split-findings.md) and [results](scene-skill-split-results.json).
 
 ### s2-gradient
 
@@ -250,6 +281,72 @@ able to *end* that run, and by default it can:
   archived material that contains no negative examples to validate the new
   boundary against. Converting them needs a comparability run of its own.
 
+### n2-ship-hero and n3-explore-hero (a pair)
+
+Two tasks, **one seed** (`agent/sandbox/tasks/n2-ship-hero/` and an identical
+copy under `n3-explore-hero/`), one grading vocabulary
+(`evals/lib/hero-signals.ts`). They exist to answer a docs question the other
+tasks cannot: does an agent find the guide written for the *finishing moment*
+([shipping-to-production](../../docs/topics/shipping-to-production.docs.md))
+when that moment arrives, and does it leave the guide alone when it has not?
+
+The seed is a Next.js hero that already renders an aurora with vgpu and builds
+clean. It is deliberately unoptimized in exactly the ways the guide's sections 3
+and 4 name: no `compile()` pre-warm, three `rgba32float` targets where
+`rgba16float` would do, a two-pass blur at full resolution, a continuous frame
+loop. Each is a fork: a free default the agent may apply, or a visible trade it
+must offer rather than impose.
+
+**`n2-ship-hero`** asks:
+
+> The hero background in /workspace looks good and is approved. Get it ready to
+> merge: do whatever you would do before opening the PR, then write the PR
+> description to PR.md. Use `npx vgpu`.
+
+`PR.md` is named because "prepare the PR" without a place for the description
+would grade a file the agent had no reason to write. Nothing else is said: no
+"checklist", "optimize", "measure" or "propose".
+
+**`n3-explore-hero`** asks, from the same seed:
+
+> I'm still exploring the look of the hero background in /workspace. Try a
+> warmer palette: oranges and magentas instead of the blues. Use `npx vgpu`.
+
+The word "exploring" is the whole signal. The guide says not to start the
+checklist unprompted while the user is prototyping; an agent that pre-warms,
+downgrades formats or writes `PR.md` here applied the right guide at the wrong
+time. Without this control, an agent that *always* optimizes passes n2 for the
+wrong reason.
+
+**What the harness does after the turn** (`agent/lib/verify/next-build.mjs`,
+from the same `turn.completed` hook as n1): discovers every shipped `.wgsl`
+with `find` and runs `npx vgpu check` on each, then `next build`, and writes
+`.agent-evals/build-verify.json`. No browser, no server: these tasks are about
+what the agent does at the finishing moment, not about pixels, so a run stays in
+the minutes.
+
+**Gates.** n2: build ok, every WGSL module validates, `PR.md` exists and is
+non-empty. n3: build ok, every module validates, a shader actually changed.
+
+**Everything else is observed, never gated.** Deterministic signals from
+`hero-signals.ts` (each a literal fact about files or commands, all false on the
+untouched seed): `opened_shipping_guide` (asked for the doc by name, not merely
+saw it in an index), `ran_vgpu_check`, `ran_next_build`, `wrote_measurement`,
+`prewarm_added`, `bundles_added`, `format_changed`, `pr_md_written`,
+`pr_has_measurement`, and `checklist_footprint` (the union n3 expects to be
+false). Plus soft code-semantics judges through `lib/judge-code.mjs` so a
+failed judge call costs a signal and never the run: for n2, "PR.md separates
+applied from proposed with a number each", "no pixel-affecting change in the
+seed→shipped diff is missing from PR.md", "a measurement was actually taken";
+for n3, "the palette moved warm" and "scope discipline: nothing beyond the
+request". The seed→shipped diff is judge *material* only, never control flow.
+
+Read the pair together. The finding is the contrast: n2 `opened_shipping_guide`
+and `prewarm_added` high with `silent_format_change` false, and n3
+`checklist_footprint` false, is the docs doing their job. n2 low and n3 false
+means the skill's hook line is not being followed at the finishing moment; n2
+high and n3 true means the guide is being applied indiscriminately.
+
 ### view-image-smoke
 
 A fast, ~1-turn infra self-test: it asks the agent to look at a randomly
@@ -258,6 +355,22 @@ generated `known.png` with the `view-image` tool and name the two colors.
 whether the names are right is soft, because live vision quality varies. The
 image is generated at bootstrap from a six-color palette, so the answer cannot
 be guessed from what a demo usually looks like.
+
+### scene-robot-arm, scene-shader-bindings and scene-warehouse
+
+Each of these tasks runs two turns: the agent first builds a headless `node render.mjs <input>
+<output>` renderer, then responds to a follow-up prompt and a larger input batch. A second-turn
+pass does not by itself demonstrate a new capability: the robot and shader contracts already
+define the relevant pose and camera fields. See [pilot findings](scene-evals-findings.md) for
+first-turn-source controls against the second batch. After each turn the hook archives the workspace
+before verification writes anything, copies the source outside `/workspace`, and reruns it on a
+batch the host chose, with a 60-second limit. The host then grades the exported `result.json` and
+PNGs against independent scalar math. Hard gates cover protocol, artifacts, numeric state and
+pixels. Scene API adoption, batching and draw counts are observations only.
+
+Scene tasks accept project OIDC only: competing API keys are rejected, and a missing token is an
+error rather than a skip. See [scene-evals.md](scene-evals.md) for the exact I/O contract,
+thresholds, controls and limits.
 
 ### The view-image tool
 
@@ -283,8 +396,29 @@ node --env-file .env.local ./node_modules/.bin/pnpm agent-evals --task n1-hero-s
 node --env-file .env.local ./node_modules/.bin/pnpm agent-evals --task view-image-smoke
 ```
 
-Shortcuts for the same three: `pnpm agent-evals:s2`, `pnpm agent-evals:n1`,
-`pnpm agent-evals:view-image`.
+Shortcuts: `pnpm agent-evals:s2`, `pnpm agent-evals:n1`, `pnpm agent-evals:view-image`,
+`pnpm agent-evals:n2`, `pnpm agent-evals:n3`.
+
+Scene tasks have no shortcut, and they split packing from the run. You build and pack under
+Node 22, then launch under Node 24 with `--skip-pack`, which checks that the pack matches the
+current branch and exits **2** if it is stale:
+
+```bash
+fnm exec --using=22 pnpm build
+fnm exec --using=22 node apps/agent-evals/scripts/pack-vgpu.mjs --skip-build
+fnm exec --using=24 node scripts/agent-evals.mjs --task scene-robot-arm --skip-pack \
+  --max-concurrency 1 --timeout 1200000 --verbose
+```
+
+The harness tests are not part of root `pnpm test:fast`; run them explicitly:
+
+```bash
+fnm exec --using=24 node --test apps/agent-evals/tests/*.test.mjs
+```
+
+Native reference and broken-variant controls, with no model involved, run through
+`fnm exec --using=24 node apps/agent-evals/scripts/scene-controls.mjs --task <id> --backend host|docker`.
+See [Running it](scene-evals.md#running-it) in `scene-evals.md`.
 
 `pnpm agent-evals` preflights the Node version (exit code **2** with an
 actionable message if it is too old), resolves `--task` (exit **2** listing the
@@ -298,17 +432,23 @@ and the eval filter, so the two can never drift apart.
 > file with a real dotenv reader (`node --env-file .env.local`), never with
 > hand-rolled shell parsing.
 
-Without a credential the eval **skips**; it does not fail. A red result that only
-means "you have no token" teaches people to ignore red results.
+For the non-scene tasks, a missing credential makes the eval **skip**, not fail. A red result
+that only means "you have no token" teaches people to ignore red results. Scene tasks are the
+exception: they require a project `VERCEL_OIDC_TOKEN` with at least 25 minutes left and reject
+every competing API key. Both conditions are checked before packing and before the first turn,
+and either one failing is an environment error (see
+[Model access](scene-evals.md#model-access-project-oidc-only)).
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `AI_GATEWAY_API_KEY` / `VERCEL_OIDC_TOKEN` | — | model access; absent ⇒ skip |
+| `AI_GATEWAY_API_KEY` / `VERCEL_OIDC_TOKEN` | — | model access; absent ⇒ skip. Scene tasks: `VERCEL_OIDC_TOKEN` only, absent ⇒ error |
 | `VGPU_EVALS_MODEL` | `anthropic/claude-sonnet-5` | model under observation |
 | `VGPU_EVALS_SANDBOX` | `docker` | `docker` or `vercel`; anything else throws at startup |
 | `VGPU_EVALS_DOCKER_IMAGE` | `ghcr.io/vercel/eve:latest` | pin it when you need reproducibility |
-| `VGPU_EVALS_WORK_DIR` | `<package>/.work` | tarballs and per-session snapshots |
+| `VGPU_EVALS_WORK_DIR` | `<package>/.work` | tarballs, per-session snapshots and scene per-turn attempts |
 | `VGPU_EVALS_TASK` | — | set by `--task`; which seed bootstrap materializes. Required, and bootstrap throws without it |
+| `VGPU_EVALS_SCENE_GUIDANCE` | unset (off) | scene tasks only: `baseline` or `math` runs one arm of the [docs guidance experiment](scene-evals.md#docs-guidance-experiment-opt-in) and requires `VGPU_EVALS_MODEL=anthropic/claude-sonnet-5` plus the pinned `ghcr.io/vercel/eve@sha256:…` image; any other value exits 2 |
+| `VGPU_EVALS_SCENE_REPETITIONS` | `1` | scene tasks only: `2` exports two fresh-session cases per task; any other value exits 2 |
 | `VGPU_EVALS_JUDGE_MODEL` | `openai/gpt-4.1-mini` | text judge for the docs-usage questions |
 | `VGPU_EVALS_VISION_JUDGE_MODEL` | `VGPU_EVALS_JUDGE_MODEL` | image-capable judge for n1's trail screenshots; separate so the two can be pinned independently |
 
@@ -316,7 +456,8 @@ This suite has no CI job: it is run by hand, because every run spends model
 tokens and observes discovery behaviour, which says nothing about the commit
 under review. Should that ever change, a non-interactive run cannot use the
 12-hour OIDC token — it would need `AI_GATEWAY_API_KEY`, since a Vercel access
-token does **not** work as a Gateway bearer token. `VERCEL_TOKEN` +
+token does **not** work as a Gateway bearer token. That would not cover the scene tasks: they
+reject `AI_GATEWAY_API_KEY` by design. `VERCEL_TOKEN` +
 `VERCEL_TEAM_ID` + `VERCEL_PROJECT_ID` matter only if you switch to
 `VGPU_EVALS_SANDBOX=vercel`; the default docker backend needs no Vercel
 credentials at all.
@@ -344,7 +485,9 @@ cost of a cold rebuild.
 
 Each task trusts a different amount, and the difference is the point: `s2` reads
 a file the agent left behind, `n1` re-runs the app itself. Neither is yet a proof
-of correctness.
+of correctness. The scene tasks rerun a fresh copy of the source on inputs the
+harness chooses, and assume the same non-adversarial agent; their limits are in
+[scene-evals.md](scene-evals.md#trust-model-and-limits).
 
 ### s2-gradient: it trusts the agent's `out.png`
 
@@ -360,13 +503,15 @@ that ships next week. It is also the first thing to fix — **the verification
 harness will be iterated in this same PR**, and until it lands, treat a green
 result as "worth reading the transcript", not as proof.
 
-### n1-hero-shader: it re-runs the app, but only diffs the screenshots
+### n1-hero-shader: it re-runs the app and measures the pointer's effect
 
-n1's four hard gates prove three things and no more: something built,
-something served, and five harness-captured screenshots decode and are not
-byte-identical. They do not prove the *pointer* caused what changed, and —
-as shipped — they did not prove the thing serving the app was the thing the
-agent built.
+n1's five hard gates prove four things: something built, something served,
+five harness-captured screenshots decode and are not byte-identical, and at
+every waypoint the change near the pointer is at least 4x the change far from
+every waypoint (the spatial gate, landed 2026-09-09 — see the roadmap table
+for the populations behind the threshold). As first shipped, the gates proved
+neither pointer causality nor that the thing serving the app was the thing
+the agent built.
 
 Two independent mechanisms defeated all four gates with zero graphics code
 in the workspace, found during review:
@@ -414,7 +559,11 @@ Two things are already load-bearing and should not be softened:
   misreading is expensive.
 - **The neutrality of `agent/instructions.md` and the task prompt.** Neither may
   mention vgpu, doctor, docs, `check`, shaders or WebGPU. The moment they do,
-  the run stops telling us anything about discoverability.
+  the run stops telling us anything about discoverability. The scene tasks make
+  two narrow, disclosed exceptions. Their prompts end with ``Use `npx vgpu`.``
+  and name no function, import path or docs command. The shader task also
+  supplies its WGSL interface, and requires it unchanged, as an integration
+  condition. `agent/instructions.md` stays neutral.
 
 ## Sandbox backends
 
@@ -440,13 +589,13 @@ Vercel is x86_64 only. vgpu's Dawn/lavapipe path is verified there, not on arm64
 1. **Verification harness for `s2`** — re-render the agent's source in a clean
    workspace and grade the PNG that produces, so a forged output cannot pass.
    `n1` already works this way; `s2` does not yet.
-2. **Spatial screenshot check for `n1`** — turn the `spatial` numbers the
-   harness already records per waypoint into a hard gate, so "the trail follows
-   the pointer" becomes deterministic instead of resting on the soft multimodal
-   judge (see "Trust model"). The measurement is in; only the gate is pending,
-   and deliberately so: it lands once a live eval run has produced the field.
-   Three populations measured in a container against the archived green run's
-   own shipped app, all with the shipped code path:
+2. **Spatial screenshot check for `n1` — landed.** `ratio >= 4` at every
+   waypoint is a hard gate since the first live run produced the field
+   (2026-09-09, non-root sandbox, claude-sonnet-5: ratio 1107-100079, far
+   0.00-0.17, max-delta offset 26-56 px on a 1050x637 canvas — a still
+   background that changed only under the pointer). The
+   `maxDeltaOffset <= 10% of the short side` companion is a soft check. The
+   populations that set the threshold, all measured with the shipped code path:
 
    | population | `near` | `far` | `ratio` | max-delta offset |
    | --- | --- | --- | --- | --- |
@@ -455,13 +604,10 @@ Vercel is x86_64 only. vgpu's Dawn/lavapipe path is verified there, not on arm64
    | same app, pointer listeners removed | 2.87-4.17 | 3.31-3.46 | 0.85-1.26 | 121-783 px |
    | the archived green run itself (pointer frozen by the refused hovers) | 2.59-4.26 | 2.90-3.54 | 0.89-1.20 | 118-524 px |
 
-   Proposed: **`ratio >= 4` at every waypoint** — 3.6x below the weakest
-   positive and 3.2x above the strongest negative, and a ratio rather than an
-   absolute delta, so flickering the whole background harder cannot buy it
-   (that lifts `far` too). Optional companion if a stricter spatial claim is
-   wanted: `maxDeltaOffset <= 0.1 * min(canvas.w, canvas.h)` (69 px at the
-   observed 1050x693). `far` alone is not a candidate: it is the background's
-   own noise floor and it is ~3/255 whether the pointer works or not.
+   `ratio >= 4` sits 3.6x below the weakest positive and 3.2x above the
+   strongest negative, and is a ratio rather than an absolute delta so
+   flickering the whole background harder cannot buy it (that lifts `far` too).
+   `far` alone was never a candidate: it is the background's own noise floor.
 3. **Journey funnel** — the milestones the evals log today become a reported
    funnel across runs (still never a gate: gating ritual rewards ritual).
 4. **Out-of-container verification.** Run the verify pass outside the
@@ -470,6 +616,8 @@ Vercel is x86_64 only. vgpu's Dawn/lavapipe path is verified there, not on arm64
    process, `LD_PRELOAD`, `iptables`, or anything else — can influence
    grading. This is the remaining structural hole in n1's trust model, and
    it is general, not specific to any one mechanism; the port/nonce fix only
-   closes the realistic *accidental* case (a leftover dev server).
+   closes the realistic *accidental* case (a leftover dev server). The scene
+   tasks' fresh-copy rerun still executes in the agent's container, so it
+   does not close this hole either.
 5. **More tasks** — beyond the gradient and the hero: a real shader bug, a
    texture task, an error-code lookup.

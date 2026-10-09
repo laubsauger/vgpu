@@ -5,6 +5,7 @@
       "vgpu",
       "vgpu/three",
       "vgpu/scene",
+      "vgpu/scene/gpu",
       "@vgpu/wgsl",
       "@vgpu/wgsl-std",
       "vgpu/core",
@@ -38,6 +39,7 @@
       ],
       "@vgpu/wgsl-std": [
         "color",
+        "scene",
         "fullscreen",
         "hash",
         "noise",
@@ -48,6 +50,7 @@
         "gpu",
         "surface",
         "target",
+        "texture",
         "frame",
         "effect",
         "draw",
@@ -76,12 +79,18 @@
         "..."
       ],
       "vgpu/scene": [
-        "camera",
-        "orthographic-camera",
-        "perspective-camera",
+        "transforms",
+        "nodes",
+        "hierarchy",
+        "instances",
+        "camera-state",
+        "geometry",
         "deg-to-rad",
         "srgb",
-        "orbit",
+        "..."
+      ],
+      "vgpu/scene/gpu": [
+        "instance-geometry",
         "..."
       ],
       "vgpu/three": [
@@ -93,12 +102,15 @@
       {
         "title": "General",
         "slugs": [
-          "getting-started"
+          "getting-started",
+          "scene-composition",
+          "scene-migration"
         ]
       },
       {
         "title": "Integrations",
         "slugs": [
+          "scene-math",
           "threejs",
           "nextjs",
           "no-bundler",
@@ -151,6 +163,8 @@
       "  Performance",
       "  Testing",
       "  ...",
+      "Migrations @ /migrations",
+      "  ...",
       "Examples @ /examples",
       "  ...",
       "CLI @ /cli",
@@ -161,6 +175,25 @@
       "    Quickstart: Browser @ /ml/browser",
       "    Quickstart: Node @ /ml/node",
       "    Buffers & ownership @ /ml/buffers",
+      "Native @ /native",
+      "  ",
+      "    Overview @ /native",
+      "  macOS",
+      "    Get started @ /native/macos",
+      "    Load Metal functions @ /native/macos/metal/functions",
+      "    Render WGSL with Metal @ /native/macos/metal/rendering",
+      "    Pack uniforms for Metal @ /native/macos/metal/uniforms",
+      "    Bind Metal buffers @ /native/macos/metal/bindings",
+      "    Render to multiple textures @ /native/macos/metal/render/targets",
+      "    Dispatch WGSL compute @ /native/macos/metal/compute/dispatch",
+      "    Use prepared compute bindings @ /native/macos/metal/compute/prepared-bindings",
+      "    Encode native indirect dispatch @ /native/macos/metal/compute/indirect-dispatch",
+      "    Render computed data @ /native/macos/metal/compute/rendering",
+      "    Configure a Metal package @ /native/macos/metal/tooling/configuration",
+      "    Resolve shader inputs @ /native/macos/metal/tooling/sources",
+      "    Check the native toolchain @ /native/macos/metal/tooling/doctor",
+      "    Build and verify a Metal package @ /native/macos/metal/tooling/build",
+      "    Publish generated packages @ /native/macos/metal/tooling/publication",
       "API Reference @ /reference",
       "  ..."
     ]

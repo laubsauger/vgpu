@@ -9,11 +9,13 @@ export type ExampleComponentLoader = () => Promise<ExampleComponentModule>;
 
 export const exampleComponentLoaders = {
   gradient: () => import('../examples/gradient/index'),
+  'holographic-card': () => import('../examples/holographic-card/index'),
   'triangle-led-front': () => import('../examples/triangle-led-front/index'),
   'anti-aliasing': () => import('../examples/anti-aliasing/index'),
   'black-hole': () => import('../examples/black-hole/index'),
   'optimized-black-hole': () => import('../examples/optimized-black-hole/index'),
   earth: () => import('../examples/earth/index'),
+  atmosphere: () => import('../examples/atmosphere/index'),
   fluid: () => import('../examples/fluid/index'),
   'instanced-rendering': () => import('../examples/instanced-rendering/index'),
   'batch-rendering': () => import('../examples/batch-rendering/index'),
@@ -24,6 +26,8 @@ export const exampleComponentLoaders = {
   'environment-map': () => import('../examples/environment-map/index'),
   transmission: () => import('../examples/transmission/index'),
   clipping: () => import('../examples/clipping/index'),
+  matcap: () => import('../examples/matcap/index'),
+  'video-to-texture': () => import('../examples/video-to-texture/index'),
   'radiance-cascades': () => import('../examples/radiance-cascades/index'),
   'agent-radiance-cascades': () => import('../examples/agent-radiance-cascades/index'),
   'nextjs-flare': () => import('../examples/nextjs-flare/index'),
@@ -35,6 +39,14 @@ export const exampleComponentLoaders = {
   'particle-orbit': () => import('../examples/particle-orbit/index'),
   'typegpu-liquid-glass': () => import('../examples/typegpu-liquid-glass/index'),
   'adaptive-quality': () => import('../examples/adaptive-quality/index'),
+  'glass-sculpture': () => import('../examples/glass-sculpture/index'),
+  'spiral-galaxy': () => import('../examples/spiral-galaxy/index'),
+  'liquid-layout': () => import('../examples/liquid-layout/index'),
+  'spring-choreography': () => import('../examples/spring-choreography/index'),
+  'modular-city': () => import('../examples/modular-city/index'),
+  'kinetic-sculpture': () => import('../examples/kinetic-sculpture/index'),
+  'marble-machine': () => import('../examples/marble-machine/index'),
+  'mechanical-garden': () => import('../examples/mechanical-garden/index'),
 } satisfies Record<ExampleSlug, ExampleComponentLoader>;
 
 export function getExampleComponentLoader(slug: ExampleSlug): ExampleComponentLoader {

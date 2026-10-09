@@ -290,6 +290,7 @@ function buildGraph(
       uniforms: {
         luminosityThreshold: OCEAN_TUNING.bloom.threshold,
         smoothWidth: OCEAN_TUNING.bloom.smoothWidth,
+        _pad0: [0, 0],
       },
       tDiffuse: scene,
       linearSampler,
@@ -330,6 +331,7 @@ function buildGraph(
       uniforms: {
         bloomStrength: OCEAN_TUNING.bloom.strength,
         bloomRadius: OCEAN_TUNING.bloom.radius,
+        _pad0: [0, 0],
         bloomFactors0: [1, 0.8, 0.6, 0.4],
         bloomFactors1: [0.2, 0, 0, 0],
       },
@@ -369,7 +371,7 @@ export type OceanGraph = ReturnType<typeof buildGraph>;
 
 function configuredEffect(
   gpu: Gpu,
-  shader: string | ShaderSource,
+  shader: ShaderSource,
   label: string,
   bindings?: Record<string, unknown>
 ): Effect {

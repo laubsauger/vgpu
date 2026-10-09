@@ -1,7 +1,10 @@
 #!/usr/bin/env node
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { selectDocSnippetFiles } from "./lib/doc-snippet-files.mjs";
+import { stableVersion } from "./lib/migrations.mjs";
+import { pendingSources } from "./migrations.mjs";
 
 const repo = process.cwd();
 const list = spawnSync(
@@ -14,7 +17,14 @@ if (list.status !== 0) {
   process.exit(list.status ?? 1);
 }
 
-const files = list.stdout.trim().split(/\r?\n/u).filter(Boolean);
+const discovered = list.stdout.trim().split(/\r?\n/u).filter(Boolean);
+const packageVersion = JSON.parse(readFileSync(join(repo, "packages/vgpu-api/package.json"), "utf8")).version;
+const recordPath = join(repo, "docs/migrations/records", `${stableVersion(packageVersion)}.json`);
+const record = existsSync(recordPath) ? JSON.parse(readFileSync(recordPath, "utf8")) : null;
+const files = selectDocSnippetFiles(discovered, { packageVersion, record, pending: pendingSources(repo) });
+if (files.length !== discovered.length) {
+  console.log(`Skipping ${discovered.length - files.length} migration guides not aligned with the current prepared API (historical or awaiting source collection).`);
+}
 const out = mkdtempSync(join(repo, ".tmp-doc-snippets-"));
 let snippets = 0;
 
@@ -65,6 +75,7 @@ try {
         "vgpu": ["packages/vgpu-api/src/index.ts"],
         "vgpu/mock": ["packages/vgpu-api/src/mock.ts"],
         "vgpu/node": ["packages/vgpu-api/src/node.ts"],
+        "vgpu/scene/gpu": ["packages/vgpu-api/src/scene/gpu.ts"],
         "vgpu/scene": ["packages/vgpu-api/src/scene.ts"],
         "vgpu/core": ["packages/vgpu-api/src/core.ts"],
         "vgpu/client": ["packages/vgpu-api/src/client.ts"],
@@ -78,11 +89,13 @@ try {
         "@vgpu/render/utils": ["packages/render/src/utils/index.ts"],
         "@vgpu/render/perf": ["packages/render/src/perf/index.ts"],
         "@vgpu/render/edit": ["packages/render/src/edit/index.ts"],
+        "@vgpu/wgsl/prepare": ["packages/wgsl/src/prepare.ts"],
         "@vgpu/wgsl": ["packages/wgsl/src/index.ts"],
         "@vgpu/wgsl/runtime": ["packages/wgsl/src/runtime/resolve-shader.ts"],
         "@vgpu/wgsl/reflect-source": ["packages/wgsl/src/runtime/reflect-source.ts"],
         "@vgpu/wgsl/loader-vite": ["packages/wgsl/src/loader-vite/index.ts"],
         "@vgpu/wgsl/loader-webpack": ["packages/wgsl/src/loader-webpack/index.ts"],
+        "@vgpu/wgsl/next": ["packages/wgsl/src/next/index.ts"],
         "@vgpu/wgsl-std/color": ["packages/wgsl-std/src/color/index.ts"],
         "@vgpu/wgsl-std/constants": ["packages/wgsl-std/src/constants/index.ts"],
         "@vgpu/wgsl-std/fullscreen": ["packages/wgsl-std/src/fullscreen/index.ts"],
