@@ -15,7 +15,7 @@ import { enterFrame, isSurface, isSurfaceResizeCallbackActive, leaveFrame } from
 import { BUILT_IN_CLEAR_COLOR, hasStencilAspect, isTarget, type ClearColor } from "./target-utils.ts";
 import type { TimerSpan } from "./timer.ts";
 import type { Visibility, VisibilityQuery } from "./visibility.ts";
-import { FRAME_PASS_ATTACHMENT, frameBundleOf, frameDrawableOf, framePassAttachmentOf, type FrameDrawableProtocol, type FrameOcclusionSource, type FrameOwner, type FramePassAttachResult } from "./frame-protocols.ts";
+import { FRAME_PASS_ATTACHMENT, frameBundleOf, frameDrawableOf, framePassAttachmentOf, type FrameDrawableProtocol, type RenderPassDrawState, type FrameOcclusionSource, type FrameOwner, type FramePassAttachResult } from "./frame-protocols.ts";
 import { frameState } from "./frame-state.ts";
 import { liveKernel } from "./live-kernel.ts";
 import { serviceToken, type Gpu, type Kernel } from "./kernel.ts";
@@ -311,7 +311,7 @@ export class Frame {
           assertDeviceUsable(this.device, where);
           if (this.#canceled) throw frameCanceledError(where);
           if (!this.#passActive) throw framePassActiveError(where);
-        }, this.#capture));
+        }, this.#capture, []));
       } finally {
         this.#passActive = false;
       }
@@ -499,12 +499,12 @@ export class Frame {
 
 export class FramePass {
   #occlusionActive = false;
-  constructor(private readonly encoder: GPURenderPassEncoder, readonly target: Target, private readonly validations: ClaimedGroupValidationResult[], private readonly depthReadOnly = false, private readonly occlusionSource?: FrameOcclusionSource, private readonly frame?: Frame, private readonly assertFrameOpen?: (where: string) => void, private readonly capture?: UniformCapture) {}
+  constructor(private readonly encoder: GPURenderPassEncoder, readonly target: Target, private readonly validations: ClaimedGroupValidationResult[], private readonly depthReadOnly = false, private readonly occlusionSource?: FrameOcclusionSource, private readonly frame?: Frame, private readonly assertFrameOpen?: (where: string) => void, private readonly capture?: UniformCapture, private readonly state?: RenderPassDrawState) {}
   draw(drawable: Draw | Effect, opts: DrawCallOptions = {}): void {
     this.assertFrameOpen?.("FramePass.draw");
     const encodable = frameDrawable(drawable);
     if (this.depthReadOnly) assertDrawableAllowedInReadOnlyPass(encodable, this.target);
-    encodable.encode(this.encoder, this.target, opts, (result) => this.validations.push(result), this.capture);
+    encodable.encode(this.encoder, this.target, opts, (result) => this.validations.push(result), this.capture, this.state);
   }
   /**
    * Wraps one or more draws in begin/endOcclusionQuery. The body ALWAYS executes; condition your
@@ -539,6 +539,8 @@ export class FramePass {
     // Staleness is checked for every bundle before the first one replays: a pass either replays the
     // whole list or none of it.
     for (const entry of recorded) entry.assertReplayable(this.target);
+    // executeBundles clears native pipeline and binding state, including an empty list.
+    if (this.state) this.state[0] = undefined;
     this.encoder.executeBundles(recorded.map((entry) => entry.gpu));
   }
 }

@@ -17,7 +17,7 @@ import { assertDeviceUsable } from "./lifecycle.ts";
 import { geometryLayoutResolver, geometryLiveness, geometryLivenessOf, targetSignatureOf, type GeometryLayoutResolvable, type GeometryLive } from "./draw-protocols.ts";
 import { resolveIndirect } from "./indirect.ts";
 import type { StorageBuffer } from "./api-types.ts";
-import { FRAME_DRAWABLE, type FrameDrawableProtocol } from "./frame-protocols.ts";
+import { FRAME_DRAWABLE, type FrameDrawableProtocol, type RenderPassDrawState } from "./frame-protocols.ts";
 import { liveKernel } from "./live-kernel.ts";
 import { renderService } from "./render-service.ts";
 import { snapshotShaderSource, type PreparedShaderSnapshot } from "./shader-source.ts";
@@ -504,13 +504,16 @@ export class InternalDraw implements Draw {
     }
   }
 
-  encode(pass: GPURenderPassEncoder, target: Target | TargetSignature, opts: DrawCallOptions = {}, claimValidation?: (result: ClaimedGroupValidationResult) => void, capture?: UniformCapture): void {
+  encode(pass: GPURenderPassEncoder, target: Target | TargetSignature, opts: DrawCallOptions = {}, claimValidation?: (result: ClaimedGroupValidationResult) => void, capture?: UniformCapture, encodingState?: RenderPassDrawState): void {
     const state = drawState(this, "encode");
     assertDeviceUsable(state.device, `${this.label}.encode`);
     state.setCore.preflight();
     const pipeline = this.pipelineFor(target);
     if (!pipeline) return;
-    pass.setPipeline(pipeline);
+    if (encodingState?.[0] !== pipeline) {
+      pass.setPipeline(pipeline);
+      if (encodingState) encodingState[0] = pipeline;
+    }
     if (state.blendConstant) pass.setBlendConstant(state.blendConstant);
     // Explicit ref always emits — even 0, which restores the pass default after an earlier draw changed it.
     if (state.stencilRef !== undefined) pass.setStencilReference(state.stencilRef);
