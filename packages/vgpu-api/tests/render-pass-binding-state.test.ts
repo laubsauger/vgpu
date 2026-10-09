@@ -40,6 +40,17 @@ test("same native pipeline is set once; bindings keep their validation path", as
   } finally { gpu.dispose(); }
 });
 
+test("different drawables sharing a native pipeline bind that pipeline once", async () => {
+  const { gpu, out, color, a, passes } = await scene();
+  const second = draw(gpu, { shader: prepareShader(SHADER), vertices: 3,
+    set: { color: { buffer: color.gpu, offset: 256, size: 16 } } });
+  try {
+    frame(gpu, f => f.pass(out, p => { p.draw(a); p.draw(second); p.draw(a); }));
+    expect(passes[0]!.pipeline).toHaveBeenCalledTimes(1);
+    expect(passes[0]!.group).toHaveBeenCalledTimes(3);
+  } finally { gpu.dispose(); }
+});
+
 test("pipeline A-B-A restores bindings even when the previous group identity returns", async () => {
   const { gpu, out, a, b, passes } = await scene();
   try {
