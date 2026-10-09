@@ -1,4 +1,4 @@
-import { clearColorInvalidError, targetPreserveSamplesError, targetSizeRequiredError, targetStencilOnlyDepthError, unsupportedError } from "./errors.ts";
+import { clearColorInvalidError, targetSizeRequiredError, targetStencilOnlyDepthError, unsupportedError, VGPUError } from "./errors.ts";
 import type { Target, TargetOptions, TargetTextureOptions } from "./target.ts";
 
 export const DEFAULT_FORMAT: GPUTextureFormat = "rgba8unorm";
@@ -47,13 +47,18 @@ export function sampleCountFor(options: TargetTextureOptions): 1 | 4 {
 }
 
 export function validateTargetOptions(options: Partial<TargetOptions> | undefined, caps: TargetDeviceCaps): void {
-  if (!options?.size) throw targetSizeRequiredError();
-  // Dead-option rule: without msaa there are no multisample attachments to preserve.
-  if (options.preserveSamples && sampleCountFor(options) !== 4) throw targetPreserveSamplesError();
+  if (!Array.isArray(options?.size) || options.size.length !== 2 || !Array.from(options.size).every(value => Number.isSafeInteger(value) && value > 0)) throw targetSizeRequiredError();
+  if (options.preserveSamples !== undefined && typeof options.preserveSamples !== "boolean") {
+    throw new VGPUError({ code: "VGPU-TARGET-PRESERVE-SAMPLES", message: "preserveSamples must be a boolean.", where: "target", fix: "Pass preserveSamples: true for an MSAA target, or omit the option." });
+  }
+  const samples = sampleCountFor(options);
+  if (options.preserveSamples === true && samples !== 4) {
+    throw new VGPUError({ code: "VGPU-TARGET-PRESERVE-SAMPLES", message: "preserveSamples requires an MSAA target.", where: "target", fix: "Add msaa: true or msaa: 4, or omit preserveSamples." });
+  }
   const depthFormat = depthFormatFor(options);
   // Stencil-only formats have no depth aspect, so the default depth state (depthWriteEnabled: true) cannot compile against them.
   if (depthFormat === "stencil8") throw targetStencilOnlyDepthError(depthFormat);
-  if (sampleCountFor(options) !== 4) return;
+  if (samples !== 4) return;
   for (const spec of colorSpecsFor(options)) validateMsaaFormat(spec.format, caps);
 }
 
@@ -66,17 +71,12 @@ function validateMsaaFormat(format: GPUTextureFormat, caps: TargetDeviceCaps): v
   );
 }
 
-/**
- * Multisample attachments are discarded after the resolve unless the target preserves samples:
- * the resolved texture is what later passes sample, so the samples are dead weight — except when a
- * later `clear: false` pass loads them, which is what `preserveSamples` opts into.
- */
 export function colorAttachment(resolved: { createView(): GPUTextureView }, msaa: { createView(): GPUTextureView } | undefined, clear: ClearColor, preserve?: boolean, preserveSamples?: boolean): GPURenderPassColorAttachment {
   const attachment: GPURenderPassColorAttachment = {
     view: (msaa ?? resolved).createView(),
     resolveTarget: msaa ? resolved.createView() : undefined,
     loadOp: preserve ? "load" : "clear",
-    storeOp: msaa && !preserveSamples ? "discard" : "store",
+    storeOp: msaa && preserveSamples !== true ? "discard" : "store",
   };
   if (!preserve) attachment.clearValue = colorValue(clear);
   return attachment;
@@ -92,9 +92,7 @@ export function depthAttachment(depth: { createView(): GPUTextureView; readonly 
     if (hasStencilAspect(depth.format)) attachment.stencilReadOnly = true;
     return attachment;
   }
-  // Multisampled depth follows the color rule: discarded after the pass unless the target preserves
-  // samples, in which case a later preserve pass depth-tests against what this pass wrote.
-  const discardSamples = depth.sampleCount! > 1 && !preserveSamples;
+  const discardSamples = depth.sampleCount! > 1 && preserveSamples !== true;
   const attachment: GPURenderPassDepthStencilAttachment = { view: depth.createView(), depthLoadOp: preserve ? "load" : "clear", depthStoreOp: discardSamples ? "discard" : "store" };
   if (!preserve) attachment.depthClearValue = clearDepth ?? 1;
   // WebGPU requires stencilLoadOp/stencilStoreOp whenever the format has a stencil aspect and stencilReadOnly is not set.

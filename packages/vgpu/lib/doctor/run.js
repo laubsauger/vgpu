@@ -6,6 +6,8 @@ import { spawnSync } from "node:child_process";
 
 const require = createRequire(import.meta.url);
 const statuses = new Set(["ok", "warn", "fail", "skip"]);
+const RENDER_PROBE_WGSL = "@fragment fn main() -> @location(0) vec4f { return vec4f(0.25, 0.5, 0.75, 1.0); }";
+let renderProbeShader;
 
 export const probeRegistry = [
   { id: "binary-resolution", platforms: ["all"], run: probeBinaryResolution },
@@ -153,7 +155,7 @@ function probeDisplay(context) {
   const wayland = context.env.WAYLAND_DISPLAY;
   return !display && !wayland
     ? { status: "ok", evidence: "DISPLAY and WAYLAND_DISPLAY are unset; this is valid for headless Vulkan." }
-    : { status: "ok", evidence: `Display state: DISPLAY=${display ?? "unset"}, WAYLAND_DISPLAY=${wayland ?? "unset"}; Dawn may select its OpenGL path.` };
+    : { status: "ok", evidence: `Display state: DISPLAY=${display ?? "unset"}, WAYLAND_DISPLAY=${wayland ?? "unset"}; Linux still defaults to Vulkan unless a backend is explicitly overridden.` };
 }
 function probeMacVersion(context) { return { status: "ok", evidence: `macOS ${context.command("sw_vers", ["-productVersion"]) ?? context.release ?? "unknown"}.` }; }
 function probeMacArchitecture(context) {
@@ -184,13 +186,16 @@ async function softwareRendererState() {
 }
 
 async function realRender() {
-  const { init, effect, frame, target } = await import("vgpu/node");
+  const [{ init, effect, frame, target }, probeShader] = await Promise.all([
+    import("vgpu/node"),
+    preparedRenderProbe(),
+  ]);
   const gpu = await init();
   try {
     const colorTarget = target(gpu, { size: [16, 16], format: "rgba8unorm", label: "vgpu-doctor" });
-    const probe = effect(gpu, "@fragment fn main() -> @location(0) vec4f { return vec4f(0.25, 0.5, 0.75, 1.0); }");
+    const probe = effect(gpu, probeShader);
     frame(gpu, (current) => current.pass({ target: colorTarget }, (encoder) => encoder.draw(probe)));
-    const pixels = await colorTarget.read();
+    const pixels = await colorTarget.color.read({ mipLevel: 0, region: "all" });
     if (!pixels || pixels.byteLength < 16 * 16 * 4) throw new Error("render readback returned too few bytes");
     const info = gpu.device?.adapterInfo ?? {};
     const name = info.description || info.device || info.vendor || "unknown adapter";
@@ -200,6 +205,14 @@ async function realRender() {
     gpu.dispose();
     throw error;
   }
+}
+
+async function preparedRenderProbe() {
+  if (!renderProbeShader) {
+    const { prepareShader } = await import("@vgpu/wgsl/prepare");
+    renderProbeShader = prepareShader(RENDER_PROBE_WGSL, "vgpu-doctor-probe.wgsl");
+  }
+  return renderProbeShader;
 }
 
 export function parseOsRelease(contents) {

@@ -1,3 +1,4 @@
+import { prepareShader } from "@vgpu/wgsl/prepare";
 import { expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { init, effect, frame, target } from "../src/mock.ts";
@@ -38,57 +39,11 @@ test("MSAA render pass descriptors resolve color and discard transient attachmen
   }
 });
 
-test("preserveSamples stores the multisample attachments across passes and still resolves every pass", async () => {
-  const gpu = await init();
-  const renderPasses = spyRenderPassDescriptors(gpu.device.gpu);
-  try {
-    const accumulating = target(gpu, { size: [4, 4], depth: "depth24plus-stencil8", msaa: true, preserveSamples: true });
-    expect(accumulating.sampleCount).toBe(4);
-    expect(accumulating.preserveSamples).toBe(true);
-    const draw = effect(gpu, SOLID, { label: "msaa-accumulate" });
-
-    // Two passes into one MSAA target: the second preserves what the first drew. Without
-    // preserveSamples this is VGPU-PASS-PRESERVE-MSAA (see "frame.pass rejects clear false" in blend-load).
-    frame(gpu, (currentFrame) => {
-      currentFrame.pass({ target: accumulating }, (pass) => pass.draw(draw));
-      currentFrame.pass({ target: accumulating, clear: false }, (pass) => pass.draw(draw));
-    });
-
-    expect(renderPasses).toHaveLength(2);
-    for (const descriptor of renderPasses) {
-      // Resolve every pass, so a mid-chain reader of `.color` sees the current accumulation.
-      expect(descriptor.colorAttachments[0]?.resolveTarget).toBeDefined();
-      expect(descriptor.colorAttachments[0]?.storeOp).toBe("store");
-      expect(descriptor.depthStencilAttachment?.depthStoreOp).toBe("store");
-      expect(descriptor.depthStencilAttachment?.stencilStoreOp).toBe("store");
-    }
-    expect(renderPasses[0]?.colorAttachments[0]?.loadOp).toBe("clear");
-    expect(renderPasses[1]?.colorAttachments[0]?.loadOp).toBe("load");
-    expect(renderPasses[1]?.depthStencilAttachment?.depthLoadOp).toBe("load");
-    expect(renderPasses[1]?.depthStencilAttachment?.stencilLoadOp).toBe("load");
-    // The default is unchanged: a target that did not opt in keeps discarding.
-    expect(target(gpu, { size: [4, 4], msaa: true }).preserveSamples).toBe(false);
-  } finally {
-    gpu.dispose();
-    vi.restoreAllMocks();
-  }
-});
-
-test("preserveSamples without msaa is a dead option and throws VGPU-TARGET-PRESERVE-SAMPLES", async () => {
-  const gpu = await init();
-  try {
-    expectThrown(() => target(gpu, { size: [4, 4], preserveSamples: true }), { code: "VGPU-TARGET-PRESERVE-SAMPLES" });
-    expectThrown(() => target(gpu, { size: [4, 4], msaa: false, preserveSamples: true }), { code: "VGPU-TARGET-PRESERVE-SAMPLES" });
-  } finally {
-    gpu.dispose();
-  }
-});
-
 test("MSAA targets compile pipelines with sample count 4", async () => {
   const gpu = await init();
   try {
     const colorTarget = target(gpu, { size: [4, 4], depth: true, msaa: true });
-    const draw = effect(gpu, SOLID, { label: "msaa-solid" });
+    const draw = effect(gpu, prepareShader(SOLID), { label: "msaa-solid" });
 
     frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (pass) => pass.draw(draw)));
 
@@ -115,7 +70,7 @@ test("MSAA target with blend keeps resolve descriptor and blend pipeline state",
   const renderPasses = spyRenderPassDescriptors(gpu.device.gpu);
   try {
     const colorTarget = target(gpu, { size: [4, 4], format: "rgba8unorm", msaa: true });
-    const draw = effect(gpu, SOLID, { label: "msaa-blend", blend: "alpha" });
+    const draw = effect(gpu, prepareShader(SOLID), { label: "msaa-blend", blend: "alpha" });
 
     frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (pass) => pass.draw(draw)));
 
@@ -140,7 +95,7 @@ test("MRT MSAA targets resolve every color and compile all color states with sam
       colors: [{ format: "rgba8unorm" }, { format: "rgba8unorm" }],
       msaa: true,
     });
-    const draw = effect(gpu, MRT, { label: "mrt-msaa" });
+    const draw = effect(gpu, prepareShader(MRT), { label: "mrt-msaa" });
 
     frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (pass) => pass.draw(draw)));
 

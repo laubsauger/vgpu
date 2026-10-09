@@ -1,4 +1,5 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { defineSandbox } from "eve/sandbox";
 import type { SandboxSession } from "eve/sandbox";
@@ -7,9 +8,19 @@ import type { SandboxSession } from "eve/sandbox";
 // the key derivation) keeps packer and consumer from ever disagreeing.
 import { sourceKey } from "../../scripts/pack-vgpu.mjs";
 import { extractJson } from "../lib/extract-json.ts";
-import { tarballsDir, taskSeedDir } from "../lib/paths.ts";
+import { tarballsDir, taskSeedDir, workDir } from "../lib/paths.ts";
 import { requireTaskId } from "../lib/task.ts";
 import { evalSandboxBackend } from "./backend.ts";
+import {
+  normalizedPackageLockSha256,
+  SCENE_EXPERIMENT_MATH_INTEGRITY,
+  sceneExperimentInstallSpecs,
+} from "../../scripts/scene-guidance.mjs";
+import { tarballsFingerprint } from "../../scripts/tarballs-fingerprint.mjs";
+import {
+  initialMathAbsenceErrors,
+  observeSceneKeyframeDependencies,
+} from "../lib/scene-keyframe-dependencies.ts";
 
 const WORKSPACE = "/workspace";
 const TARBALL_DIR_IN_SANDBOX = `${WORKSPACE}/.vgpu-tarballs`;
@@ -19,7 +30,14 @@ interface TarballManifest {
   sourceKey: string;
   gitSha: string;
   gitBranch: string;
-  tarballs: { name: string; version: string; file: string }[];
+  tarballs: { name: string; version: string; file: string; sha256?: string }[];
+  sceneGuidance?: {
+    experiment: string;
+    variant: "baseline" | "math";
+    docsManifestPath: string;
+    docsSha256: string;
+    dependency: { name: string; version: string };
+  };
 }
 
 function readManifest(): TarballManifest {
@@ -86,33 +104,6 @@ function fatal(message: string): Error {
   return new Error(message);
 }
 
-/**
- * Template cache key.
- *
- * It must change whenever the packed code changes, or a rebuilt branch is
- * graded against a cached sandbox holding the PREVIOUS build — the most
- * expensive way to be wrong here, because everything still looks like it
- * worked. It must ALSO stay stable when nothing changed, or every run pays for
- * a full template rebuild.
- *
- * Hashing the tarball bytes satisfied only the first: `vgpu`'s tarball is not
- * byte-reproducible across packs (its `prepack` regenerates docs), so the key
- * moved on every pack. The manifest's `sourceKey` hashes the source inputs
- * instead — see sourceKey() in scripts/pack-vgpu.mjs.
- */
-function tarballsFingerprint(): string {
-  const manifestPath = join(tarballsDir(), "tarballs.json");
-  if (!existsSync(manifestPath)) return "no-tarballs";
-  try {
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as TarballManifest;
-    return `vgpu-${manifest.sourceKey}`;
-  } catch {
-    // A revalidation key must never be the thing that fails a run; a distinct
-    // constant just forces one rebuild.
-    return "unreadable-manifest";
-  }
-}
-
 interface DoctorReport {
   verdict: string | null;
   raw: string;
@@ -165,10 +156,30 @@ const REMEDIES: { label: string; command: string }[] = [
   },
   {
     label: "distro Vulkan loader + Mesa ICD (doctor's 'Alternative (system packages)')",
-    command:
+    command: asRoot(
       "apt-get update && apt-get install -y libvulkan1 libdrm2 zlib1g libzstd1 libudev1 mesa-vulkan-drivers",
+    ),
   },
 ];
+
+/**
+ * Runs a package-manager command as root whether or not the sandbox user is.
+ *
+ * `ghcr.io/vercel/eve:latest` is a floating tag, and the revision published on
+ * 2026-09-03 switched the container user from root to `vercel-sandbox` (uid
+ * 1001, passwordless sudo). Every bare `apt-get` here then failed with
+ * "Permission denied", the `|| true` that keeps the remedy ladder moving
+ * swallowed it, and bootstrap ended on an honest but misleading "doctor is
+ * unhealthy after applying its prescriptions" — the prescriptions had never
+ * applied. `sudo -n` (never prompt) keeps a missing sudo or a password prompt
+ * a loud failure instead of a hang.
+ *
+ * `command` must not contain single quotes; every caller passes a literal.
+ */
+function asRoot(command: string): string {
+  if (command.includes("'")) throw new Error(`asRoot: command must not contain single quotes: ${command}`);
+  return `if [ "$(id -u)" = 0 ]; then ${command}; else sudo -n sh -c '${command}'; fi`;
+}
 
 /**
  * Content key for the RUNNING TASK's seed tree (`agent/sandbox/tasks/<id>/`).
@@ -235,6 +246,137 @@ async function seedTaskWorkspace(sandbox: SandboxSession, taskId: string): Promi
   return files.length;
 }
 
+async function verifySceneGuidanceInstall(
+  sandbox: SandboxSession,
+  manifest: TarballManifest,
+  taskId: string,
+): Promise<void> {
+  if (taskId === "scene-quaternion-keyframes") {
+    const initialDependencySnapshot = await observeSceneKeyframeDependencies(sandbox);
+    const absenceErrors = initialMathAbsenceErrors(initialDependencySnapshot);
+    if (absenceErrors.length > 0) {
+      throw fatal(`bootstrap: initial math absence check failed: ${absenceErrors.join("; ")}`);
+    }
+    const sandboxNode = await sandbox.run({ command: "node -p process.version", workingDirectory: WORKSPACE });
+    writeTemplateProvenance(taskId, {
+      schemaVersion: 1,
+      taskId,
+      sourceKey: manifest.sourceKey,
+      templateKey: `${tarballsFingerprint(tarballsDir())}-${taskId}-${taskSeedFingerprint()}`,
+      initialDependencySnapshot,
+      model: process.env.VGPU_EVALS_MODEL ?? "unavailable",
+      dockerImage: process.env.VGPU_EVALS_DOCKER_IMAGE ?? "unavailable",
+      sandboxRuntime: { node: (sandboxNode.stdout ?? "").trim() || "unavailable" },
+      recordedAt: new Date().toISOString(),
+    });
+    return;
+  }
+  const guidance = manifest.sceneGuidance;
+  const requiresMathIntegrity = taskId === "scene-math-interop" || Boolean(guidance);
+  if (!requiresMathIntegrity) return;
+  if (!guidance) {
+    const math = await verifyPinnedMathInstall(sandbox, "0.1.0");
+    const vgpuPackageText = await sandbox.readTextFile({ path: `${WORKSPACE}/node_modules/vgpu/package.json` });
+    const npmLs = await sandbox.run({ command: "npm ls --all --json", workingDirectory: WORKSPACE });
+    const sandboxNode = await sandbox.run({ command: "node -p process.version", workingDirectory: WORKSPACE });
+    const vgpuPackage = vgpuPackageText ? JSON.parse(vgpuPackageText) as { version?: string } : {};
+    writeTemplateProvenance(taskId, {
+      schemaVersion: 1,
+      taskId,
+      sourceKey: manifest.sourceKey,
+      templateKey: `${tarballsFingerprint(tarballsDir())}-${taskId}-${taskSeedFingerprint()}`,
+      packages: { vgpu: vgpuPackage.version ?? "unavailable", math: math.version },
+      mathIntegrity: math.integrity,
+      normalizedPackageLockSha256: normalizedPackageLockSha256(math.lockText),
+      dependencyTreeSha256: sha256(JSON.stringify(JSON.parse(npmLs.stdout ?? "{}"))),
+      model: process.env.VGPU_EVALS_MODEL ?? "unavailable",
+      dockerImage: process.env.VGPU_EVALS_DOCKER_IMAGE ?? "unavailable",
+      sandboxRuntime: { node: (sandboxNode.stdout ?? "").trim() || "unavailable" },
+      recordedAt: new Date().toISOString(),
+    });
+    return;
+  }
+  const located = await sandbox.run({
+    command:
+      "find node_modules -type f -path '*/dist/cli/lib/generated/docs-manifest.generated.js' -print",
+    workingDirectory: WORKSPACE,
+  });
+  const manifestPaths = (located.stdout ?? "").split("\n").map((value) => value.trim()).filter(Boolean);
+  if (manifestPaths.length !== 1) {
+    throw fatal(`bootstrap: expected exactly one installed docs manifest, found ${manifestPaths.length}`);
+  }
+  const installedDocs = await sandbox.readBinaryFile({ path: `${WORKSPACE}/${manifestPaths[0]}` });
+  if (!installedDocs) throw fatal("bootstrap: installed docs manifest could not be read");
+  const installedDocsSha256 = sha256(installedDocs);
+  if (installedDocsSha256 !== guidance.docsSha256) {
+    throw fatal(
+      `bootstrap: installed docs manifest hash ${installedDocsSha256} does not match assigned hash ${guidance.docsSha256}`,
+    );
+  }
+
+  const math = await verifyPinnedMathInstall(sandbox, guidance.dependency.version);
+  const vgpuPackageText = await sandbox.readTextFile({ path: `${WORKSPACE}/node_modules/vgpu/package.json` });
+  if (!vgpuPackageText) {
+    throw fatal("bootstrap: experiment dependency or package-lock provenance is missing");
+  }
+  const vgpuPackage = JSON.parse(vgpuPackageText) as { version?: string };
+
+  const npmLs = await sandbox.run({ command: "npm ls --all --json", workingDirectory: WORKSPACE });
+  const sandboxNode = await sandbox.run({ command: "node -p process.version", workingDirectory: WORKSPACE });
+  const dependencyTree = JSON.parse(npmLs.stdout ?? "{}");
+  const templateKey = `${tarballsFingerprint(tarballsDir())}-${taskId}-${taskSeedFingerprint()}`;
+  const provenance = {
+    schemaVersion: 1,
+    experiment: guidance.experiment,
+    condition: guidance.variant,
+    sourceKey: manifest.sourceKey,
+    templateKey,
+    docsManifestPath: guidance.docsManifestPath,
+    expectedDocsSha256: guidance.docsSha256,
+    installedDocsSha256,
+    installedDocsManifestPaths: manifestPaths,
+    packages: { vgpu: vgpuPackage.version ?? "unavailable", math: math.version },
+    mathIntegrity: math.integrity,
+    normalizedPackageLockSha256: normalizedPackageLockSha256(math.lockText),
+    dependencyTreeSha256: sha256(JSON.stringify(dependencyTree)),
+    model: process.env.VGPU_EVALS_MODEL ?? "unavailable",
+    dockerImage: process.env.VGPU_EVALS_DOCKER_IMAGE ?? "unavailable",
+    sandboxRuntime: { node: (sandboxNode.stdout ?? "").trim() || "unavailable" },
+    recordedAt: new Date().toISOString(),
+  };
+  writeTemplateProvenance(`${taskId}-${guidance.docsSha256}`, provenance);
+}
+
+function writeTemplateProvenance(name: string, provenance: unknown): void {
+  const directory = join(workDir(), "template-provenance");
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, `${name}.json`), `${JSON.stringify(provenance, null, 2)}\n`, "utf8");
+}
+
+async function verifyPinnedMathInstall(sandbox: SandboxSession, expectedVersion: string): Promise<{
+  version: string;
+  integrity: string;
+  lockText: string;
+}> {
+  const mathPackageText = await sandbox.readTextFile({ path: `${WORKSPACE}/node_modules/math/package.json` });
+  const lockText = await sandbox.readTextFile({ path: `${WORKSPACE}/package-lock.json` });
+  if (!mathPackageText || !lockText) throw fatal("bootstrap: math package or package-lock provenance is missing");
+  const mathPackage = JSON.parse(mathPackageText) as { version?: string };
+  const lock = JSON.parse(lockText) as { packages?: Record<string, { version?: string; integrity?: string }> };
+  const lockedMath = lock.packages?.["node_modules/math"];
+  if (mathPackage.version !== expectedVersion || lockedMath?.version !== expectedVersion) {
+    throw fatal(`bootstrap: expected math@${expectedVersion}, got installed ${String(mathPackage.version)} and locked ${String(lockedMath?.version)}`);
+  }
+  if (lockedMath.integrity !== SCENE_EXPERIMENT_MATH_INTEGRITY) {
+    throw fatal("bootstrap: math@0.1.0 lock integrity does not match the pinned dependency");
+  }
+  return { version: expectedVersion, integrity: lockedMath.integrity, lockText };
+}
+
+function sha256(value: Uint8Array | string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
 /**
  * Extra bootstrap work for one specific task, cached in its template.
  *
@@ -250,7 +392,7 @@ const TASK_EXTRAS: Record<string, { label: string; command: string }[]> = {
   "n1-hero-shader": [
     {
       label: "browser runtime libraries (Vulkan loader, Mesa, virtual X server)",
-      command: "apt-get update && apt-get install -y libvulkan1 mesa-vulkan-drivers xvfb xauth",
+      command: asRoot("apt-get update && apt-get install -y libvulkan1 mesa-vulkan-drivers xvfb xauth"),
     },
     {
       // PR #272 review (P1-9): `curl`, `pgrep` and `setsid` are behind hard
@@ -266,17 +408,25 @@ const TASK_EXTRAS: Record<string, { label: string; command: string }[]> = {
       // the base image today, so this line is a declaration of a real
       // dependency, not a workaround for a real gap.
       label: "verify-pass dependencies (curl for the port/nonce poll, pgrep/setsid for process control)",
-      command: "apt-get update && apt-get install -y curl procps util-linux",
+      command: asRoot("apt-get update && apt-get install -y curl procps util-linux"),
     },
     {
-      label: "playwright's chromium + its system libraries (Chrome for Testing publishes no arm64 build)",
-      // `--with-deps` is load-bearing, not belt-and-braces: the bare
-      // `playwright install chromium` downloads a browser that cannot start on
-      // this image at all — `libglib-2.0.so.0: cannot open shared object file`,
-      // exit 127 before Chrome ever writes a DevTools port. The apt line above
-      // covers the Vulkan/X side, not Chromium's own GTK/ATK/NSS closure, and
-      // `--with-deps` is playwright's own maintained list of exactly those.
-      command: "npm install -g playwright && npx playwright install --with-deps chromium",
+      // Split in three because the sandbox user is no longer root (see asRoot).
+      // The system-library half needs apt, so it runs as root; the browser
+      // download must NOT — a root install lands under /root/.cache (mode 700),
+      // where neither the agent nor the verify pass, both running as the
+      // sandbox user, can read it. `install-deps` is load-bearing, not
+      // belt-and-braces: a bare `playwright install chromium` downloads a browser
+      // that cannot start on this image (`libglib-2.0.so.0: cannot open shared
+      // object file`, exit 127 before Chrome writes a DevTools port); the apt line
+      // above covers the Vulkan/X side, not Chromium's own GTK/ATK/NSS closure.
+      // `npm install -g` needs no sudo: npm's global prefix is ~/.local here.
+      label: "playwright's chromium + its system libraries (agent-browser's own download is not usable on arm64)",
+      command: [
+        "npm install -g playwright",
+        asRoot("npx -y playwright install-deps chromium"),
+        "npx playwright install chromium",
+      ].join(" && "),
     },
   ],
   // A fresh random image per run, so the smoke test cannot be passed by guessing
@@ -307,7 +457,7 @@ export default defineSandbox({
   // given, and nothing about the run looks wrong. Without the task id, two
   // tasks with different seeds would fight over one cache entry, and warming
   // n1's expensive template would invalidate s2's.
-  revalidationKey: () => `${tarballsFingerprint()}-${requireTaskId()}-${taskSeedFingerprint()}`,
+  revalidationKey: () => `${tarballsFingerprint(tarballsDir())}-${requireTaskId()}-${taskSeedFingerprint()}`,
 
   /**
    * Runs once per sandbox TEMPLATE. It installs the branch's vgpu and proves
@@ -348,9 +498,13 @@ export default defineSandbox({
     // must resolve to each other is exactly what a flat npm tree does well.
     // Every tarball is listed explicitly (no glob) so the command does not
     // depend on shell expansion inside the sandbox.
-    const specs = manifest.tarballs.map((tarball) => `./.vgpu-tarballs/${tarball.file}`).join(" ");
+    const specs = [
+      ...manifest.tarballs.map((tarball) => `./.vgpu-tarballs/${tarball.file}`),
+      ...sceneExperimentInstallSpecs(manifest),
+      "pngjs",
+    ].join(" ");
     const install = await sandbox.run({
-      command: `npm install --no-audit --no-fund --loglevel=error ${specs} pngjs`,
+      command: `npm install --no-audit --no-fund --loglevel=error ${specs}`,
       workingDirectory: WORKSPACE,
     });
     // Belt and braces: eve throws on a non-zero exit before this runs, and its
@@ -369,6 +523,8 @@ export default defineSandbox({
       command: "npm install --no-audit --no-fund --loglevel=error",
       workingDirectory: WORKSPACE,
     });
+
+    await verifySceneGuidanceInstall(sandbox, manifest, taskId);
 
     let doctor = await runDoctor(sandbox);
     for (const remedy of REMEDIES) {

@@ -12,9 +12,9 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 import { createManifest, serializeManifest } from "./manifest.js";
-import { buildSkill } from "./skill.js";
+import { buildSkill, isAuthoredSkillPath } from "./skill.js";
 
 // Writes are atomic (temp file in the same directory, then rename) because this generator runs
 // as `prepack` for both packages/vgpu and packages/vgpu-api. `npm pack` and the docs tests can
@@ -35,11 +35,12 @@ function writeAtomic(outPath, content) {
 // manifest no longer produces keeps the "no stale files" guarantee while making concurrent runs
 // idempotent instead of destructive. Depth-first so directories are considered after their
 // contents.
-function prune(dir, expected) {
+function prune(dir, expected, skillDir = dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = resolve(dir, entry.name);
+    if (isAuthoredSkillPath(relative(skillDir, full).split(sep).join("/"))) continue;
     if (entry.isDirectory()) {
-      prune(full, expected);
+      prune(full, expected, skillDir);
       try {
         rmdirSync(full);
       } catch {}
@@ -51,20 +52,42 @@ function prune(dir, expected) {
 
 export function loadManifest(root) {
   const allowlistPath = resolve(root, "docs/allowlist.txt");
-  const topicsDir = resolve(root, "docs/topics");
   // Guide docs (conceptual topics) are auto-discovered from docs/topics — no allowlist entry needed.
-  const guides = existsSync(topicsDir)
-    ? readdirSync(topicsDir)
-        .filter((file) => file.endsWith(".docs.md"))
-        .sort()
-        .map((file) => `docs/topics/${file}`)
-    : [];
+  const guides = discoverGuidePaths(root);
 
   return createManifest(readFileSync(allowlistPath, "utf8"), {
     exists: (path) => existsSync(resolve(root, path)),
     read: (path) => readFileSync(resolve(root, path), "utf8"),
     guides,
+    migrations: existsSync(resolve(root, "docs/migrations"))
+      ? readdirSync(resolve(root, "docs/migrations")).filter(file => file.endsWith(".docs.md")).sort().map(file => `docs/migrations/${file}`)
+      : [],
   });
+}
+
+/**
+ * Finds guide sources recursively while keeping their repository-relative paths stable and
+ * platform-independent. Guide symbols and virtual paths continue to come from the basename in
+ * manifest.js; nesting is only an authoring aid and does not change the CLI or generated skill.
+ */
+export function discoverGuidePaths(root) {
+  const topicsDir = resolve(root, "docs/topics");
+  if (!existsSync(topicsDir)) return [];
+
+  const guides = [];
+  const visit = (directory) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = resolve(directory, entry.name);
+      if (entry.isDirectory()) {
+        visit(path);
+      } else if (entry.isFile() && entry.name.endsWith(".docs.md")) {
+        guides.push(relative(root, path).split(sep).join("/"));
+      }
+    }
+  };
+
+  visit(topicsDir);
+  return guides.sort();
 }
 
 /**
