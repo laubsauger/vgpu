@@ -3,7 +3,7 @@ name: vgpu
 description: >-
   Build, debug, test, and optimize WebGPU projects using vgpu, its CLI, or @vgpu packages.
   Use for vgpu API questions, WGSL workflows, browser or Node rendering, integrations,
-  testing, and performance work.
+  testing, performance work, and Blender asset modeling, baking, and runtime integration.
 ---
 
 # vgpu
@@ -18,6 +18,18 @@ The public skill install command has no branch pin:
 ```sh
 npx skills add vercel-labs/vgpu
 ```
+
+## 3D scenes
+
+If you need to work with 3D scenes, read [Scene composition](./scene.md) before implementing
+scene hierarchies, transforms, instances, cameras, or animation and physics integration.
+
+## Blender assets
+
+For Blender modeling, high/low-poly workflows, normal or ambient occlusion baking, LODs, and
+asset validation, read [Blender assets](blender/index.md). That guide links to focused references
+for shape and assembly or baking diagnostics; load them when the task needs them. Its authoring
+guidance is independent of the vgpu version. For runtime API work, use the package docs below.
 
 ## Select the package version
 
@@ -76,6 +88,13 @@ local binary; with npm, retain `npm exec --no -- vgpu` for every docs command. S
 started for unfamiliar projects, use `find` for task or symbol discovery, use `grep` for details
 mentioned inside pages, and `cat` every relevant guide and API page before changing code. Let
 `docs --help` from that installed version define the available commands.
+
+When upgrading a project, record its previous version before changing dependencies. After selecting
+the authorized target version, run `docs ls /migrations` through that version's local CLI and read
+the intervening version guides in order. Each guide identifies affected usage and verification steps;
+skip changes already applied, including when moving between RCs of the same release. Older packages
+may not bundle migration guides: report that absence and consult the exact release's notes instead
+of silently substituting the current hosted docs.
 
 For MCP-based lookup, start `vgpu mcp` through the same project-local executable so it serves the
 same bundled corpus. A hosted MCP server is a convenience for current stable documentation, not

@@ -1,3 +1,4 @@
+import { prepareShader } from "@vgpu/wgsl/prepare";
 import { describe, expect, test } from "vitest";
 import { init, effect, frame, target } from "../../src/node.ts";
 
@@ -32,10 +33,10 @@ describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("vgpu ring-1 Docker GPU ac
     const gpu = await init();
     try {
       const colorTarget = target(gpu, { size: [8, 8], format: "rgba8unorm" });
-      const wave = effect(gpu, WAVE, { label: "wave", set: { speed: 2 } });
+      const wave = effect(gpu, prepareShader(WAVE), { label: "wave", set: { speed: 2 } });
       wave.set({ time: Math.PI / 4 });
       frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (p) => p.draw(wave)));
-      const pixels = await colorTarget.read();
+      const pixels = await colorTarget.color.read({ mipLevel: 0, region: "all" });
       const pixel = [...pixels.slice(4 * (4 * 8 + 4), 4 * (4 * 8 + 4) + 4)];
       expect(pixel[2]).toBeGreaterThan(245);
       expect(pixel[3]).toBe(255);
@@ -54,8 +55,8 @@ describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("vgpu ring-1 Docker GPU ac
       expect(msaaScene.color.sampleCount).toBe(1);
       expect(msaaScene.depth?.sampleCount).toBe(4);
       const output = target(gpu, { size: [8, 8], format: "rgba8unorm", label: "output" });
-      const solid = effect(gpu, SOLID, { label: "solid" });
-      const post = effect(gpu, POST, { label: "post" });
+      const solid = effect(gpu, prepareShader(SOLID), { label: "solid" });
+      const post = effect(gpu, prepareShader(POST), { label: "post" });
       frame(gpu, (currentFrame) => {
         currentFrame.pass({ target: msaaScene, clear: [0, 0, 0, 1] }, (p) => p.draw(solid));
         currentFrame.pass({ target: scene, clear: [0, 0, 0, 1] }, (p) => p.draw(solid));
@@ -64,12 +65,12 @@ describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("vgpu ring-1 Docker GPU ac
           p.draw(post);
         });
       });
-      const msaaPixels = await msaaScene.read();
+      const msaaPixels = await msaaScene.color.read({ mipLevel: 0, region: "all" });
       const msaaPixel = [...msaaPixels.slice(4 * (4 * 8 + 4), 4 * (4 * 8 + 4) + 4)];
       expect(msaaPixel[1]).toBeGreaterThan(100);
       expect(msaaPixel[2]).toBeGreaterThan(150);
 
-      const pixels = await output.read();
+      const pixels = await output.color.read({ mipLevel: 0, region: "all" });
       const pixel = [...pixels.slice(4 * (4 * 8 + 4), 4 * (4 * 8 + 4) + 4)];
       expect(pixel[1]).toBeGreaterThan(100);
       expect(pixel[2]).toBeGreaterThan(150);
@@ -85,13 +86,13 @@ describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("vgpu ring-1 Docker GPU ac
       const scene = target(gpu, { size: [8, 8], format: "rgba16float", depth: true, msaa: true, label: "sceneHdrMsaa" });
       expect(scene.sampleCount).toBe(4);
       const output = target(gpu, { size: [8, 8], format: "rgba8unorm", label: "outputHdrMsaa" });
-      const solid = effect(gpu, SOLID, { label: "solidHdrMsaa" });
-      const post = effect(gpu, POST, { label: "postHdrMsaa" });
+      const solid = effect(gpu, prepareShader(SOLID), { label: "solidHdrMsaa" });
+      const post = effect(gpu, prepareShader(POST), { label: "postHdrMsaa" });
       frame(gpu, (currentFrame) => {
         currentFrame.pass({ target: scene, clear: [0, 0, 0, 1] }, (p) => p.draw(solid));
         currentFrame.pass({ target: output }, (p) => { post.set({ src: scene, texel: scene.texelSize }); p.draw(post); });
       });
-      const pixels = await output.read();
+      const pixels = await output.color.read({ mipLevel: 0, region: "all" });
       const pixel = [...pixels.slice(4 * (4 * 8 + 4), 4 * (4 * 8 + 4) + 4)];
       expect(pixel[1]).toBeGreaterThan(100);
       expect(pixel[2]).toBeGreaterThan(150);

@@ -6,6 +6,10 @@ packages/*/dist/
 *.log
 .env*
 coverage/
+/artifacts/
+/docs/plans/
+# Agent pipeline scratch (research, decisions, plans, lane worktrees); see .claude/skills/vgpu-agent-flow
+/.context/
 .vscode/
 .idea/
 # Editor backup/swap files
@@ -18,3 +22,5 @@ coverage/
 .*.swo
 .tmp-doc-snippets-*/
 .codex/runtime/
+/experiments/native-metal-spikes/
+.vercel

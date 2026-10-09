@@ -1,3 +1,4 @@
+import { prepareShader } from "@vgpu/wgsl/prepare";
 import { afterEach, expect, test, vi } from "vitest";
 import { FrameRunner } from "../src/frame.ts";
 import { init, effect, frame, frameLoop, target } from "../src/mock.ts";
@@ -42,6 +43,33 @@ test("FrameRunner.loop caps callbacks to the requested fps", () => {
   expect(submitted).toBe(3);
   expect(advanced).toBe(3);
   expect(callbacks.has(6)).toBe(false);
+});
+
+test("FrameRunner.loop accepts ticks a hair short of the fps interval and still skips half-interval ticks", () => {
+  const callbacks = new Map<number, RafCallback>();
+  let nextId = 1;
+  globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => {
+    const id = nextId++;
+    callbacks.set(id, cb);
+    return id;
+  }) as typeof requestAnimationFrame;
+  globalThis.cancelAnimationFrame = ((id: number) => { callbacks.delete(id); }) as typeof cancelAnimationFrame;
+
+  let calls = 0;
+  const runner = new FrameRunner(() => ({ submit: () => {} }) as never, () => {});
+
+  const handle = runner.loop(() => { calls += 1; }, { fps: 60 });
+  // A 60 Hz display reports ticks of about 16.6 ms: every one of them must run, or the loop drops to 30-48 fps.
+  fire(callbacks, 1, 0);
+  fire(callbacks, 2, 16.6);
+  fire(callbacks, 3, 33.2);
+  fire(callbacks, 4, 49.8);
+  // A 120 Hz display: the 8.3 ms tick is skipped, the next one runs.
+  fire(callbacks, 5, 58.1);
+  fire(callbacks, 6, 66.4);
+  handle.stop();
+
+  expect(calls).toBe(5);
 });
 
 test("FrameRunner.frame cancels the frame when the callback throws and rethrows the callback's own error", () => {
@@ -111,7 +139,7 @@ test("gpu.dispose() stops the render loops that gpu started", async () => {
   const callbacks = mockAnimationFrames();
   const gpu = await init();
   const colorTarget = target(gpu, { size: [4, 4] });
-  const shader = effect(gpu, `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }`);
+  const shader = effect(gpu, prepareShader(`@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }`));
 
   let calls = 0;
   frameLoop(gpu, (currentFrame) => {
@@ -195,7 +223,7 @@ test("dispose stops the loops before the device goes down, then tears down once"
   const stop = handle.stop.bind(handle);
   handle.stop = () => { order.push("loop.stop"); stop(); };
   const colorTarget = target(gpu, { size: [4, 4] });
-  const shader = effect(gpu, `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }`);
+  const shader = effect(gpu, prepareShader(`@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }`));
   frame(gpu, (currentFrame) => currentFrame.pass(colorTarget, shader)); // materializes the pipeline cache
   vi.spyOn(gpu.device, "dispose").mockImplementation(() => { order.push("device.dispose"); });
 

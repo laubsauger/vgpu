@@ -1,31 +1,36 @@
+import { nativeScope, nativeObject, objectValidation } from "./native-validation.ts";
 import { bindGroupLayoutMetadata, type Device } from "@vgpu/core";
 import type { EntryPointInfo, OverrideInfo } from "@vgpu/wgsl/reflect-source";
 import type { Target, CompileTarget, TargetSignature } from "./target.ts";
 import { isTarget } from "./target-utils.ts";
 import { compileDisposedError, compileFailedError, compileSignatureInvalidError, constantsInvalidError, entryInvalidError, pipelineLayoutGapError, type VGPUError } from "./errors.ts";
+import { targetSignatureOf } from "./draw-protocols.ts";
 
 export interface ErrorCtx {
   readonly where: string;
   readonly signature?: string;
+  readonly dependencies?: readonly object[];
+  readonly retry?: boolean;
 }
 
 export type ErrorSink = (error: VGPUError) => void | Promise<void>;
 export type SettledSource = () => readonly Promise<unknown>[];
 export type RegisterSettledSource = (source: SettledSource) => () => void;
 
-export type PipelineEntry = {
-  pipeline?: GPURenderPipeline;
-  pending?: {
-    promise: Promise<GPURenderPipeline>;
-    resolve(pipeline: GPURenderPipeline): void;
-    reject(error: unknown): void;
-  };
+export type PipelineEntry<T = GPURenderPipeline> = {
+  pipeline?: T;
+  validated?: boolean;
+  failure?: VGPUError;
+  validation?: Promise<void>;
+  generation: number;
+  pending?: { promise: Promise<T>; resolve(value: T): void; reject(error: unknown): void };
 };
 
-export interface PipelineStore {
-  getReady(key: string): GPURenderPipeline | undefined;
-  getSync(key: string, create: () => GPURenderPipeline, ctx: ErrorCtx): GPURenderPipeline | undefined;
-  getAsync(key: string, create: () => Promise<GPURenderPipeline>, ctx: ErrorCtx): Promise<GPURenderPipeline>;
+export interface PipelineStore<T = GPURenderPipeline> {
+  getReady(key: string): T | undefined;
+  getSync(key: string, create: () => T, ctx: ErrorCtx): T;
+  getAsync(key: string, create: () => Promise<T>, ctx: ErrorCtx): Promise<T>;
+  failure(key: string): Promise<unknown | null>;
   dispose(): void;
 }
 
@@ -51,6 +56,14 @@ const shaderModuleIds = new WeakMap<GPUShaderModule, number>();
 const pipelineLayoutIds = new WeakMap<GPUPipelineLayout, number>();
 
 export function normalizeSignature(arg: CompileTarget): TargetSignature {
+  const configured = targetSignatureOf(arg);
+  if (configured) {
+    return {
+      colors: [...configured.colors],
+      depth: configured.depth,
+      sampleCount: configured.sampleCount ?? 1,
+    };
+  }
   if (isTarget(arg)) {
     return {
       colors: arg.colors.map((color) => color.format),
@@ -80,7 +93,8 @@ export function validateTargetSignature(sig: TargetSignature, where: string): vo
 }
 
 export function pipelineKeyOf(parts: {
-  readonly module: GPUShaderModule;
+  readonly vertexModule: GPUShaderModule;
+  readonly fragmentModule: GPUShaderModule;
   readonly pipelineLayout: GPUPipelineLayout;
   readonly vertexBufferLayouts?: readonly GPUVertexBufferLayout[];
   readonly signature: TargetSignature;
@@ -96,27 +110,37 @@ export function pipelineKeyOf(parts: {
   readonly constantsKey?: string;
   readonly entryKey?: string;
 }): string {
-  const base = `${idFor(shaderModuleIds, parts.module, () => nextShaderModuleId++)}|${idFor(pipelineLayoutIds, parts.pipelineLayout, () => nextPipelineLayoutId++)}|${vertexLayoutHash(parts.vertexBufferLayouts ?? [])}|${signatureKeyOf(parts.signature)}`;
-  const primitive = parts.topology || parts.stripIndexFormat ? `${base}|${parts.topology ?? "triangle-list"}|${parts.stripIndexFormat ?? "none"}` : base;
-  const culled = parts.cullMode || parts.frontFace ? `${primitive}|${parts.cullMode ?? "none"}|${parts.frontFace ?? "ccw"}` : primitive;
-  const clipped = parts.unclippedDepth ? `${culled}|unclipped` : culled;
-  const withDepth = parts.depthKey ? `${clipped}|${parts.depthKey}` : clipped;
-  const withStencil = parts.stencilKey ? `${withDepth}|${parts.stencilKey}` : withDepth;
-  const withMultisample = parts.multisampleKey ? `${withStencil}|${parts.multisampleKey}` : withStencil;
-  const withConstants = parts.constantsKey ? `${withMultisample}|${parts.constantsKey}` : withMultisample;
+  let key = `${idFor(shaderModuleIds, parts.vertexModule, () => nextShaderModuleId++)}|${idFor(shaderModuleIds, parts.fragmentModule, () => nextShaderModuleId++)}|${idFor(pipelineLayoutIds, parts.pipelineLayout, () => nextPipelineLayoutId++)}|${vertexLayoutHash(parts.vertexBufferLayouts ?? [])}|${signatureKeyOf(parts.signature)}`;
+  if (parts.topology || parts.stripIndexFormat) key += `|${parts.topology ?? "triangle-list"}|${parts.stripIndexFormat ?? "none"}`;
+  if (parts.cullMode || parts.frontFace) key += `|${parts.cullMode ?? "none"}|${parts.frontFace ?? "ccw"}`;
+  if (parts.unclippedDepth) key += "|unclipped";
   // The shader module is shared per byte-identical source, so entry point names must key variants themselves.
-  const withEntry = parts.entryKey ? `${withConstants}|${parts.entryKey}` : withConstants;
-  return parts.fragmentKey ? `${withEntry}|${parts.fragmentKey}` : withEntry;
+  for (const suffix of [parts.depthKey, parts.stencilKey, parts.multisampleKey, parts.constantsKey, parts.entryKey, parts.fragmentKey]) if (suffix) key += `|${suffix}`;
+  return key;
+}
+
+/** Compute variants use the same immutable module/layout identities as render variants. */
+export function computePipelineKeyOf(module: GPUShaderModule, layout: GPUPipelineLayout, entry: string, constantsKey = ""): string {
+  return `compute|${idFor(shaderModuleIds, module, () => nextShaderModuleId++)}|${idFor(pipelineLayoutIds, layout, () => nextPipelineLayoutId++)}|${entry}|${constantsKey}`;
 }
 
 /**
- * Selects the entry point a pipeline stage compiles: the first entry point of the stage when no name is given
- * (exactly today's behavior), or the named one — validated to exist and to have the requested stage. Callers must
+ * Selects an explicitly named entry after validating its stage. Without a name, prefer the stage convention
+ * (vs_main/fs_main/cs_main), falling back to its first entry; a unique entry needs no particular name. Callers must
  * run this selection before deriving anything from the result (binding visibility, storage-stage limits, bind
  * group layouts, vertex input layouts), so the whole pipeline reflects the chosen variant.
  */
 export function selectEntryPoint(label: string, entryPoints: readonly EntryPointInfo[], stage: "vertex" | "fragment" | "compute", name: string | undefined, where: string): EntryPointInfo | undefined {
-  if (name === undefined) return entryPoints.find((entry) => entry.stage === stage);
+  if (name === undefined) {
+    const preferred = { vertex: "vs_main", fragment: "fs_main", compute: "cs_main" }[stage];
+    let first: EntryPointInfo | undefined;
+    for (const entry of entryPoints) {
+      if (entry.stage !== stage) continue;
+      first ??= entry;
+      if (entry.name === preferred) return entry;
+    }
+    return first;
+  }
   if (typeof name !== "string") {
     throw entryInvalidError(label, `${stage} received ${previewConstant(name)}; expected an entry point name string.`, where);
   }
@@ -203,15 +227,16 @@ function previewConstant(value: unknown): string {
   try { return JSON.stringify(value) ?? String(value); } catch { return String(value); }
 }
 
-export function createShaderModuleCache(device: Device): ShaderModuleCache {
+export function createShaderModuleCache(device: Device, observe?: (object: object, where: string) => void): ShaderModuleCache {
   const modules = new Map<string, GPUShaderModule>();
   return {
     get(source, label) {
       let module = modules.get(source);
       if (!module) {
         // GPUShaderModule is immutable; the first creator's label wins for byte-identical WGSL.
-        module = device.gpu.createShaderModule({ label, code: source });
+        module = nativeObject(device, () => device.gpu.createShaderModule({ label, code: source }));
         modules.set(source, module);
+        observe?.(module, label);
       }
       return module;
     },
@@ -219,15 +244,16 @@ export function createShaderModuleCache(device: Device): ShaderModuleCache {
   };
 }
 
-export function createPipelineLayoutCache(device: Device): PipelineLayoutCache {
+export function createPipelineLayoutCache(device: Device, observe?: (object: object, where: string) => void): PipelineLayoutCache {
   const layouts = new Map<string, GPUPipelineLayout>();
   return {
     get(bindGroupLayouts) {
       const key = pipelineLayoutKeyOf(bindGroupLayouts);
       let layout = layouts.get(key);
       if (!layout) {
-        layout = device.gpu.createPipelineLayout({ bindGroupLayouts: contiguousLayouts(bindGroupLayouts) });
+        layout = nativeObject(device, () => device.gpu.createPipelineLayout({ bindGroupLayouts: contiguousLayouts(bindGroupLayouts) }), [...bindGroupLayouts.values()]);
         layouts.set(key, layout);
+        observe?.(layout, "pipeline.layout");
       }
       return layout;
     },
@@ -235,12 +261,12 @@ export function createPipelineLayoutCache(device: Device): PipelineLayoutCache {
   };
 }
 
-export function createPipelineStore(device: Device, opts: PipelineStoreOptions = {}): PipelineStore {
-  return new DevicePipelineStore(device, opts);
+export function createPipelineStore<T = GPURenderPipeline>(device: Device, opts: PipelineStoreOptions = {}): PipelineStore<T> {
+  return new DevicePipelineStore<T>(device, opts);
 }
 
-class DevicePipelineStore implements PipelineStore {
-  readonly #entries = new Map<string, PipelineEntry>();
+class DevicePipelineStore<T> implements PipelineStore<T> {
+  readonly #entries = new Map<string, PipelineEntry<T>>();
   readonly #tracked = new Set<Promise<unknown>>();
   readonly #errorSink: ErrorSink;
   readonly #unregisterSettledSource?: () => void;
@@ -251,127 +277,111 @@ class DevicePipelineStore implements PipelineStore {
     this.#unregisterSettledSource = opts.registerSettledSource?.(() => [...this.#tracked]);
   }
 
-  getReady(key: string): GPURenderPipeline | undefined {
-    return this.#entries.get(key)?.pipeline;
+  getReady(key: string): T | undefined { return this.#entries.get(key)?.pipeline; }
+
+  async failure(key: string): Promise<unknown | null> {
+    const entry = this.#entries.get(key);
+    await entry?.validation;
+    return entry?.failure ?? null;
   }
 
-  getSync(key: string, create: () => GPURenderPipeline, ctx: ErrorCtx): GPURenderPipeline | undefined {
+  getSync(key: string, create: () => T, ctx: ErrorCtx): T {
     this.#assertUsable(ctx.where);
-    const existing = this.#entries.get(key);
-    if (existing?.pipeline) return existing.pipeline;
-    const entry = existing ?? {};
-    if (!existing) this.#entries.set(key, entry);
-    const pipeline = this.#createSyncPipeline(key, entry, create, ctx);
-    if (!pipeline) {
-      if (!entry.pending) this.#entries.delete(key);
-      return undefined;
-    }
-    entry.pipeline = pipeline;
-    entry.pending?.resolve(pipeline);
-    entry.pending = undefined;
-    return pipeline;
-  }
-
-  getAsync(key: string, create: () => Promise<GPURenderPipeline>, ctx: ErrorCtx): Promise<GPURenderPipeline> {
-    this.#assertUsable(ctx.where);
-    const existing = this.#entries.get(key);
-    if (existing?.pipeline) return Promise.resolve(existing.pipeline);
-    if (existing?.pending) return existing.pending.promise;
-
-    const entry: PipelineEntry = {};
-    const pending = createDeferred();
-    entry.pending = pending;
-    this.#entries.set(key, entry);
-
-    let native: Promise<GPURenderPipeline>;
+    let entry = this.#entries.get(key);
+    if (entry?.failure && !ctx.retry) throw entry.failure;
+    if (entry?.pipeline) return entry.pipeline;
+    if (!entry || entry.failure) { entry = { generation: 0 }; this.#entries.set(key, entry); }
+    const current = entry;
+    const generation = ++current.generation;
     try {
-      native = create();
+      const { value, error } = nativeScope(this.device, create);
+      current.pipeline = value;
+      const validation = Promise.all([objectValidation(ctx.dependencies ?? []), error]).then(async errors => {
+        if (this.#disposed || current.generation !== generation) return;
+        const cause = errors.find(Boolean);
+        if (cause) {
+          const failure = compileFailedError(ctx.where, cause, ctx.signature);
+          current.failure = failure;
+          current.pipeline = undefined;
+          current.pending?.reject(failure);
+          current.pending = undefined;
+          await this.#errorSink(failure);
+        } else {
+          current.validated = true;
+          current.pending?.resolve(value);
+          current.pending = undefined;
+        }
+      });
+      current.validation = validation;
+      this.#track(validation);
+      return value;
     } catch (cause) {
       const error = compileFailedError(ctx.where, cause, ctx.signature);
-      pending.reject(error);
-      this.#entries.delete(key);
-      return pending.promise;
+      current.failure = error;
+      current.pending?.reject(error);
+      current.pending = undefined;
+      throw error;
     }
+  }
 
-    this.#track(native);
-    native.then(
-      (pipeline) => {
-        if (this.#entries.get(key) !== entry || entry.pipeline || entry.pending !== pending) return;
-        entry.pipeline = pipeline;
-        entry.pending = undefined;
-        pending.resolve(pipeline);
-      },
-      (cause) => {
-        if (this.#entries.get(key) !== entry || entry.pipeline || entry.pending !== pending) return;
-        entry.pending = undefined;
-        this.#entries.delete(key);
-        pending.reject(compileFailedError(ctx.where, cause, ctx.signature));
-      },
-    );
+  getAsync(key: string, create: () => Promise<T>, ctx: ErrorCtx): Promise<T> {
+    this.#assertUsable(ctx.where);
+    let entry = this.#entries.get(key);
+    if (entry?.pipeline) {
+      if (entry.validated) return Promise.resolve(entry.pipeline);
+      entry.pending ??= createDeferred<T>();
+      return entry.pending.promise;
+    }
+    if (entry?.pending) return entry.pending.promise;
+    entry = { generation: 0, pending: createDeferred<T>() };
+    this.#entries.set(key, entry);
+    const current = entry;
+    const pending = current.pending!;
+    const generation = ++current.generation;
+    let native: Promise<T>;
+    let scope: Promise<unknown | null>;
+    try {
+      const captured = nativeScope(this.device, create);
+      native = captured.value;
+      scope = captured.error;
+    } catch (cause) { native = Promise.reject(cause); scope = Promise.resolve(null); }
+    const work = Promise.all([native.then(value => ({ value }), cause => ({ cause })), objectValidation(ctx.dependencies ?? []), scope]).then(([result, dependencyError, nativeError]) => {
+      if (this.#disposed || current.generation !== generation) return;
+      const cause = dependencyError ?? nativeError ?? ("cause" in result ? result.cause : undefined);
+      if (cause || "cause" in result) {
+        current.failure = compileFailedError(ctx.where, cause, ctx.signature);
+        pending.reject(current.failure);
+      } else {
+        current.pipeline = (result as { value: T }).value;
+        current.validated = true;
+        pending.resolve(current.pipeline);
+      }
+      current.pending = undefined;
+    });
+    this.#track(work);
     return pending.promise;
   }
 
   dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;
-    const error = compileDisposedError("gpu.dispose");
-    for (const entry of this.#entries.values()) entry.pending?.reject(error);
+    for (const entry of this.#entries.values()) entry.pending?.reject(compileDisposedError("gpu.dispose"));
     this.#entries.clear();
     this.#tracked.clear();
     this.#unregisterSettledSource?.();
   }
 
-  #createSyncPipeline(key: string, entry: PipelineEntry, create: () => GPURenderPipeline, ctx: ErrorCtx): GPURenderPipeline | undefined {
-    const gpu = this.device.gpu as GPUDevice & { pushErrorScope?: GPUDevice["pushErrorScope"]; popErrorScope?: GPUDevice["popErrorScope"] };
-    const scoped = typeof gpu.pushErrorScope === "function" && typeof gpu.popErrorScope === "function";
-    if (scoped) gpu.pushErrorScope("validation");
-    try {
-      const pipeline = create();
-      if (scoped) this.#trackSyncErrorScope(key, entry, ctx);
-      return pipeline;
-    } catch (cause) {
-      if (scoped) this.#suppressSyncErrorScopePop();
-      const error = compileFailedError(ctx.where, cause, ctx.signature);
-      void this.#errorSink(error);
-      return undefined;
-    }
-  }
-
-  #trackSyncErrorScope(key: string, entry: PipelineEntry, ctx: ErrorCtx): void {
-    const pop = this.device.gpu.popErrorScope!()
-      .then((nativeError) => {
-        if (!nativeError) return;
-        const error = compileFailedError(ctx.where, nativeError, ctx.signature);
-        if (this.#entries.get(key) === entry) this.#entries.delete(key);
-        return this.#errorSink(error);
-      }, (cause) => {
-        const error = compileFailedError(ctx.where, cause, ctx.signature);
-        if (this.#entries.get(key) === entry) this.#entries.delete(key);
-        return this.#errorSink(error);
-      });
-    this.#track(pop);
-  }
-
-  #suppressSyncErrorScopePop(): void {
-    const pop = this.device.gpu.popErrorScope?.();
-    if (pop) void pop.catch(() => undefined);
-  }
-
-  #assertUsable(where: string): void {
-    if (!this.#disposed) return;
-    throw compileDisposedError(where);
-  }
-
+  #assertUsable(where: string): void { if (this.#disposed) throw compileDisposedError(where); }
   #track(promise: Promise<unknown>): void {
     this.#tracked.add(promise);
-    void promise.catch(() => undefined).then(() => this.#tracked.delete(promise), () => this.#tracked.delete(promise));
+    void promise.then(() => this.#tracked.delete(promise), () => this.#tracked.delete(promise));
   }
 }
 
-function createDeferred(): NonNullable<PipelineEntry["pending"]> {
-  let resolve!: (value: GPURenderPipeline) => void;
+function createDeferred<T>(): NonNullable<PipelineEntry<T>["pending"]> {
+  let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
-  const promise = new Promise<GPURenderPipeline>((res, rej) => { resolve = res; reject = rej; });
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
   void promise.catch(() => undefined);
   return { promise, resolve, reject };
 }

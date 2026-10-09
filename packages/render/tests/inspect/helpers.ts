@@ -1,8 +1,9 @@
 import { PNG } from "pngjs";
 import type { Device } from "@vgpu/core";
-import type { Camera, Mat4, Vec3 } from "vgpu/scene";
+import type { Mat4, Vec3 } from "vgpu/scene";
 import type { Mesh } from "../../src/mesh-like.ts";
 import type { InspectMaterial } from "@vgpu/render/inspect";
+import type { TestCamera } from "./camera.ts";
 
 export interface RenderInspectFrameSpec {
   readonly device: Device;
@@ -12,7 +13,7 @@ export interface RenderInspectFrameSpec {
   readonly indexBuffer?: GPUBuffer;
   readonly indexFormat?: GPUIndexFormat;
   readonly indexCount?: number;
-  readonly camera: Camera;
+  readonly camera: TestCamera;
   readonly modelMatrix?: Mat4;
   readonly targetFormat?: GPUTextureFormat;
   readonly clearValue?: GPUColor;
@@ -52,11 +53,12 @@ export function createReadableBoxMesh(device: Device, size = 1): Mesh {
 
 export async function renderInspectFrame(spec: RenderInspectFrameSpec): Promise<Uint8Array> {
   const color = spec.device.createTexture({
+    kind: "2d",
     size: [WIDTH, HEIGHT],
     format: spec.targetFormat ?? DEFAULT_TARGET_FORMAT,
     usage: ["render_attachment", "copy_src"],
   });
-  const depth = spec.device.createTexture({ size: [WIDTH, HEIGHT], format: "depth24plus", usage: ["render_attachment"] });
+  const depth = spec.device.createTexture({ kind: "2d", size: [WIDTH, HEIGHT], format: "depth24plus", usage: ["render_attachment"] });
   const uniformBuffer = spec.device.createBuffer({
     label: "renderInspectFrame.uniform",
     size: spec.material.uniformByteSize,
@@ -69,7 +71,7 @@ export async function renderInspectFrame(spec: RenderInspectFrameSpec): Promise<
       entries: [{ binding: 0, resource: { buffer: uniformBuffer.gpu } }],
     });
     spec.material.writeUniforms(uniformBuffer.gpu, 0, {
-      viewProjectionMatrix: spec.camera.viewProjectionMatrix,
+      viewProjectionMatrix: spec.camera.viewProjection,
       modelMatrix: spec.modelMatrix ?? IDENTITY,
     });
 
@@ -101,7 +103,7 @@ export async function renderInspectFrame(spec: RenderInspectFrameSpec): Promise<
     spec.device.queue.gpu.submit([encoder.finish()]);
 
     const png = new PNG({ width: WIDTH, height: HEIGHT });
-    png.data.set(await color.read());
+    png.data.set(await color.read({ mipLevel: 0, region: "all" }));
     return PNG.sync.write(png);
   } finally {
     uniformBuffer.destroy();
