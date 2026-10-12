@@ -35,8 +35,8 @@ export fn backgroundColor(height: f32) -> vec3f {
 }
 
 // Material codes carried per vertex; keep in sync with MATERIAL in meshes.ts.
-export const MATERIAL_YELLOW: u32 = 0u;
-export const MATERIAL_PANEL: u32 = 1u;
+export const MATERIAL_COVER: u32 = 0u;
+export const MATERIAL_ACCENT: u32 = 1u;
 export const MATERIAL_GRAPHITE: u32 = 2u;
 export const MATERIAL_LENS: u32 = 3u;
 export const MATERIAL_LED: u32 = 4u;

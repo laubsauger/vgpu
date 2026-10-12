@@ -191,7 +191,7 @@ export function setCount(colony: Colony, count: number): void {
     spawn(colony, index);
     placeRobot(robot, colony.terrain, spot[0], spot[1], mulberry32.sample(random) * Math.PI * 2);
     colony.count = index + 1;
-    // Every third dog carries the sensor payload (lidar mast and payload box).
+    // Every third dog carries the sensor payload (cargo deck, dome and camera).
     robot.palette = index % 3 === 1 ? 1 : 0;
     robot.phase = mulberry32.sample(random);
     colony.idle[index] = 0.5 + mulberry32.sample(random) * 2;
