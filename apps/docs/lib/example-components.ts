@@ -26,6 +26,8 @@ export const exampleComponentLoaders = {
   'environment-map': () => import('../examples/environment-map/index'),
   transmission: () => import('../examples/transmission/index'),
   clipping: () => import('../examples/clipping/index'),
+  matcap: () => import('../examples/matcap/index'),
+  'video-to-texture': () => import('../examples/video-to-texture/index'),
   'radiance-cascades': () => import('../examples/radiance-cascades/index'),
   'agent-radiance-cascades': () => import('../examples/agent-radiance-cascades/index'),
   'nextjs-flare': () => import('../examples/nextjs-flare/index'),
@@ -38,6 +40,13 @@ export const exampleComponentLoaders = {
   'typegpu-liquid-glass': () => import('../examples/typegpu-liquid-glass/index'),
   'adaptive-quality': () => import('../examples/adaptive-quality/index'),
   'glass-sculpture': () => import('../examples/glass-sculpture/index'),
+  'spiral-galaxy': () => import('../examples/spiral-galaxy/index'),
+  'liquid-layout': () => import('../examples/liquid-layout/index'),
+  'spring-choreography': () => import('../examples/spring-choreography/index'),
+  'modular-city': () => import('../examples/modular-city/index'),
+  'kinetic-sculpture': () => import('../examples/kinetic-sculpture/index'),
+  'marble-machine': () => import('../examples/marble-machine/index'),
+  'mechanical-garden': () => import('../examples/mechanical-garden/index'),
 } satisfies Record<ExampleSlug, ExampleComponentLoader>;
 
 export function getExampleComponentLoader(slug: ExampleSlug): ExampleComponentLoader {

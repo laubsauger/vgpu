@@ -9,6 +9,8 @@ import { sharedUniformLayoutMismatchError, unsupportedError } from "./errors.ts"
 import { writeLayoutValue } from "./set-packing.ts";
 import { formatSharedUniformLayout, sharedUniformLayoutSignature } from "./uniforms-layout.ts";
 import { assertBufferUsable } from "./lifecycle.ts";
+import { bytesEqual } from "./bytes-equal.ts";
+import type { UniformValue } from "./frame-uniforms.ts";
 
 interface SharedUniformLayoutState {
   readonly layout: HostShareableLayout & { readonly size: number };
@@ -25,24 +27,38 @@ interface SharedUniformLayoutState {
  */
 export class SharedUniformsImpl<T extends Record<string, unknown>> implements SharedUniforms<T>, BindingResourceProvider {
   #values: Record<string, unknown>;
+  #revision = 0;
+  #bytes?: Uint8Array<ArrayBuffer>;
   #state?: SharedUniformLayoutState;
   #bufferRef?: Buffer;
+  #dirty = false;
+  #liveUniform = false;
+  readonly #captureToken = {};
+  #uniformValue?: UniformValue;
 
   constructor(private readonly device: Device, initialValues: T) {
     this.#values = cloneRecord(initialValues);
   }
 
-  get buffer(): Buffer | undefined { return this.#bufferRef; }
-  get gpu(): GPUBuffer | undefined { return this.#bufferRef?.gpu; }
+  get buffer(): Buffer | undefined { this.#prepareUniform(true); return this.#bufferRef; }
+  get gpu(): GPUBuffer | undefined { this.#prepareUniform(true); return this.#bufferRef?.gpu; }
   get size(): number | undefined { return this.#state?.layout.size; }
 
   set(values: Partial<T>): void {
     const next = cloneRecord(this.#values);
     mergeInto(next, values as Record<string, unknown>);
     if (this.#state && this.#bufferRef) {
+      assertBufferUsable(this.#bufferRef, "uniforms.set");
       const bytes = writeLayoutValue(this.#state.layout, next);
-      this.#bufferRef.write(bytes, 0);
-    }
+      // Storage and exposed buffers can change behind our back: always write them.
+      const live = this.#liveUniform || this.#state.addressSpace === "storage";
+      if (live) this.#bufferRef.write(bytes, 0);
+      if (!this.#bytes || !bytesEqual(this.#bytes, bytes)) {
+        this.#bytes = new Uint8Array(bytes);
+        this.#revision += 1;
+        this.#dirty = !live;
+      } else if (live) this.#dirty = false;
+    } else this.#revision += 1;
     this.#values = next;
   }
 
@@ -58,10 +74,22 @@ export class SharedUniformsImpl<T extends Record<string, unknown>> implements Sh
     const buffer = this.#requiredBuffer();
     assertBufferUsable(buffer, `${sourceHint}.set`);
     return {
+      resourceLabel: buffer.options.label ?? buffer.gpu.label,
       resource: { buffer: buffer.gpu, offset: 0, size: adopted.layout.size },
+      ...(adopted.addressSpace === "uniform" ? {
+        uniformValue: () => this.#currentUniformValue(),
+        prepareUniform: (retain: boolean) => this.#prepareUniform(retain),
+      } : {}),
       identity: buffer.resourceIdentity,
-      unsubscribe: (cb) => buffer.onDestroy(cb),
+      tracked: [{ resource: buffer, identity: buffer.resourceIdentity, subscribe: (cb) => buffer.onDestroy(cb) }],
     };
+  }
+
+  #currentUniformValue(): UniformValue {
+    const value = this.#uniformValue;
+    if (value?.revision === this.#revision && value.bytes === this.#bytes) return value;
+    // Captures key on the inert token: a pending frame must not retain this facade.
+    return this.#uniformValue = { owner: this.#captureToken, revision: this.#revision, bytes: this.#bytes! };
   }
 
   #ensureLayout(binding: BindingInfo, sourceHint: string): SharedUniformLayoutState {
@@ -88,14 +116,27 @@ export class SharedUniformsImpl<T extends Record<string, unknown>> implements Sh
       label: `${binding.name}.sharedUniform`,
     });
     try {
-      buffer.write(bytes, 0);
+      if (addressSpace === "storage") buffer.write(bytes, 0);
     } catch (error) {
       buffer.destroy();
       throw error;
     }
+    this.#bytes = new Uint8Array(bytes);
     this.#state = state;
     this.#bufferRef = buffer;
+    this.#dirty = addressSpace === "uniform";
     return state;
+  }
+
+  // Accessors and bundle recording expose a buffer that can be submitted without our hooks.
+  // Keep it current from that point on; ordinary managed frame consumers only need CPU bytes.
+  #prepareUniform(retain: boolean): void {
+    if (!this.#bufferRef) return;
+    if (this.#dirty) {
+      this.#bufferRef.write(this.#bytes!, 0);
+      this.#dirty = false;
+    }
+    if (retain) this.#liveUniform = true;
   }
 
   #assertCompatibleLayout(binding: BindingInfo, layout: HostShareableLayout, addressSpace: "uniform" | "storage", sourceHint: string): void {

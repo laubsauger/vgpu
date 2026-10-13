@@ -1,6 +1,6 @@
 {
   "name": "vgpu",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Public VGPU API entrypoint scaffold for browser, Node, mock, scene, and client typing surfaces.",
   "keywords": [
     "webgpu",
@@ -45,6 +45,11 @@
       "types": "./dist/scene.d.ts",
       "import": "./dist/scene.js",
       "default": "./dist/scene.js"
+    },
+    "./scene/gpu": {
+      "types": "./dist/scene/gpu.d.ts",
+      "import": "./dist/scene/gpu.js",
+      "default": "./dist/scene/gpu.js"
     },
     "./client": {
       "types": "./client.d.ts",
@@ -107,28 +112,30 @@
     "./node": "tooling",
     "./mock": "tooling",
     "./scene": "client",
+    "./scene/gpu": "client",
     "./client": "client",
     "./core": "client",
     "./three": "client"
   },
   "vgpuExportBundleBudgetsGzipBytes": {
-    ".": 41984,
-    "./node": 39936,
-    "./mock": 39936,
-    "./scene": 12800,
+    ".": 58880,
+    "./node": 58880,
+    "./mock": 58368,
+    "./scene": 19456,
     "./client": 512,
     "./core": 3584,
-    "./three": 2560
+    "./three": 2560,
+    "./scene/gpu": 6656
   },
   "bin": {
     "vgpu": "./bin/vgpu.js"
   },
   "vgpuExperienceBundleBudgetsGzipBytes": {
     "init-only": 1536,
-    "effect-only": 28160,
-    "triangle-low-level": 31232,
-    "draw-recipe-box": 32768,
-    "full-root": 41984
+    "effect-only": 43520,
+    "triangle-low-level": 46592,
+    "draw-recipe-box": 47104,
+    "full-root": 58880
   },
   "vgpuSceneBundleBudgetNote": "The scene barrel retains all recipe builders after the geometry redesign; direct primitive imports retain only their selected mesh, as the experience fixtures assert."
 }

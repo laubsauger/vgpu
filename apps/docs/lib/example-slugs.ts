@@ -17,6 +17,8 @@ export const exampleSlugs = [
   'environment-map',
   'transmission',
   'clipping',
+  'matcap',
+  'video-to-texture',
   'radiance-cascades',
   'agent-radiance-cascades',
   'nextjs-flare',
@@ -29,6 +31,13 @@ export const exampleSlugs = [
   'typegpu-liquid-glass',
   'adaptive-quality',
   'glass-sculpture',
+  'spiral-galaxy',
+  'liquid-layout',
+  'spring-choreography',
+  'modular-city',
+  'kinetic-sculpture',
+  'marble-machine',
+  'mechanical-garden',
 ] as const;
 
 export type ExampleSlug = (typeof exampleSlugs)[number];
