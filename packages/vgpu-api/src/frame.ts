@@ -88,7 +88,11 @@ function frameRunner(kernel: Kernel): FrameRunner {
   });
 }
 
-export interface FrameComputePassOptions { readonly label?: string }
+export interface FrameComputePassOptions {
+  readonly label?: string;
+  /** Times this pass on the GPU: pass `timer.span(name)` from a `timer(gpu)`, as for `FramePassOptions.timer`. One span name per frame. */
+  readonly timer?: TimerSpan;
+}
 
 export interface FrameComputePass {
   dispatch(pipeline: Compute, x: number, y?: number, z?: number): void;
@@ -190,7 +194,17 @@ export class Frame {
     const callback = typeof options === "function" ? options : body;
     if (typeof callback !== "function") throw new VGPUError({ code: "VGPU-COMPUTE-PASS-INVALID", message: "computePass requires a synchronous callback.", where: "Frame.computePass" });
     const label = typeof options === "function" ? "vgpu.computePass" : options.label ?? "vgpu.computePass";
-    const encoder = validateOperation(this.device, this.#computeValidations, `${label}.begin`, () => this.#encoder.beginComputePass({ label }));
+    // Owners this pass attached: the rollback set if the pass fails, exactly as in pass().
+    const attached: FrameOwner[] = [];
+    let encoder: GPUComputePassEncoder;
+    try {
+      const timer = typeof options === "function" || options.timer === undefined ? undefined : this.#attach(options.timer, undefined, attached, computeTimerAttachmentInvalidError);
+      encoder = validateOperation(this.device, this.#computeValidations, `${label}.begin`, () =>
+        this.#encoder.beginComputePass(timer?.timestampWrites ? { label, timestampWrites: timer.timestampWrites } : { label }));
+    } catch (error) {
+      this.#discardOwners(attached);
+      throw error;
+    }
     this.#passActive = true;
     let open = true;
     const pass: FrameComputePass = {
@@ -209,7 +223,7 @@ export class Frame {
         void Promise.resolve(returned).catch(() => undefined);
         throw new VGPUError({ code: "VGPU-COMPUTE-PASS-ASYNC", message: "computePass callbacks must be synchronous; await preparation before opening the frame.", where: "Frame.computePass" });
       }
-    } catch (error) { failed = true; throw error; }
+    } catch (error) { failed = true; this.#discardOwners(attached); throw error; }
     finally {
       open = false;
       this.#passActive = false;
@@ -460,12 +474,12 @@ export class Frame {
    * protocol, so the frame never learns whether it is a timer span, a visibility or a future
    * scene-view generation: it only records the owner it must settle exactly once.
    */
-  #attach(value: unknown, target: Target, attached: FrameOwner[], invalid: (value: unknown) => VGPUError): FramePassAttachResult {
+  #attach(value: unknown, target: Target | undefined, attached: FrameOwner[], invalid: (value: unknown) => VGPUError): FramePassAttachResult {
     const attachment = framePassAttachmentOf(value);
     if (!attachment) throw invalid(value);
     let result: FramePassAttachResult;
     try {
-      result = attachment[FRAME_PASS_ATTACHMENT]({ frame: this, device: this.device, target });
+      result = attachment[FRAME_PASS_ATTACHMENT]({ frame: this, device: this.device, ...(target === undefined ? {} : { target }) });
     } catch (error) {
       // A duplicate/capacity failure can land after the same instance already contributed an
       // earlier pass to this frame, and a failed attach cannot report whose bookkeeping it left
@@ -576,6 +590,10 @@ function invalidBundle(): never {
 
 function timerAttachmentInvalidError(value: unknown): VGPUError {
   return timerInvalidError(`FramePassOptions.timer received ${previewValue(value)}; expected a TimerSpan from timer.span(name).`, `Create const passTimer = timer(gpu) once, then pass passTimer.span("name") per pass.`, "Frame.pass");
+}
+
+function computeTimerAttachmentInvalidError(value: unknown): VGPUError {
+  return timerInvalidError(`FrameComputePassOptions.timer received ${previewValue(value)}; expected a TimerSpan from timer.span(name).`, `Create const passTimer = timer(gpu) once, then pass passTimer.span("name") per pass.`, "Frame.computePass");
 }
 
 function visibilityAttachmentInvalidError(value: unknown): VGPUError {

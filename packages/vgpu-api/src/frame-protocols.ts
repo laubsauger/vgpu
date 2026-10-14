@@ -101,8 +101,11 @@ export interface FramePassAttachContext {
   readonly frame: FrameHandle;
   /** The device the frame encodes against; attachments validate their own device against it. */
   readonly device: Device;
-  /** The pass's resolved target, for attachments that require specific attachments (occlusion needs depth). */
-  readonly target: Target;
+  /**
+   * The pass's resolved target, for attachments that require specific attachments (occlusion needs
+   * depth). Absent for a compute pass, which has no attachments: only a timer attaches there.
+   */
+  readonly target?: Target;
 }
 
 /** Occlusion query source of a pass: supplied by the attachment, consumed by `FramePass.occlusion()`. */

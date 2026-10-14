@@ -331,7 +331,7 @@ The callback returns its `Promise` at the first `await`, so the frame would othe
 
 ## Compute passes and captured uniforms
 
-Use `frame.computePass(pass => pass.dispatch(simulation, x, y, z))` to encode compute work in the same command buffer as render passes. An optional `{ label }` identifies the native compute pass. `pass.dispatch(simulation, { indirect: args })` uses GPU-produced counts. One callback opens one compute pass, and can contain several dispatches.
+Use `frame.computePass(pass => pass.dispatch(simulation, x, y, z))` to encode compute work in the same command buffer as render passes. An optional `{ label }` identifies the native compute pass, and an optional `{ timer: clock.span(name) }` times it exactly as `FramePassOptions.timer` times a render pass: the span lands in the same `onResults` as the frame's render passes, and a compute pass that fails rolls its timer back with the frame's. `pass.dispatch(simulation, { indirect: args })` uses GPU-produced counts. One callback opens one compute pass, and can contain several dispatches.
 
 Compute-pass callbacks are synchronous: await pipeline preparation before the frame. Passes cannot nest; submit or cancel only after a pass ends. A retained compute-pass object throws `VGPU-COMPUTE-PASS-CLOSED` after its callback. A foreign pipeline throws `VGPU-COMPUTE-DEVICE-MISMATCH`; a thenable callback result throws `VGPU-COMPUTE-PASS-ASYNC`. A canceled/submitted frame rejects new passes.
 

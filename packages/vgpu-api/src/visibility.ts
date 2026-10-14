@@ -210,7 +210,7 @@ export class InternalVisibility {
    * attachment knows that rule.
    */
   [FRAME_PASS_ATTACHMENT](ctx: FramePassAttachContext): FramePassAttachResult {
-    if (!ctx.target.depth) throw visibilityNoDepthError();
+    if (!ctx.target?.depth) throw visibilityNoDepthError();
     this.attachFrame(ctx.frame, ctx.device);
     return {
       owner: this,
