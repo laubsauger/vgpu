@@ -1,7 +1,7 @@
 // One robot-dog leg in body-local space (+X right, +Y up, +Z forward): an analytic hip abduction
 // roll φ about the body's forward axis, then femur + tibia as a two-bone math/ik fabrik3 chain
 // hinged about the rolled axis X' = (cos φ, sin φ, 0). The leg plane holds the body's forward axis
-// for every φ, so the knee always bends fore-aft and points backward, like the reference robot.
+// for every φ, so the knee always bends fore-aft and points backward.
 // The app clamps every target into the reachable band itself, because fabrik3's isReachable only
 // checks the outer radius, and it checks the knee side after each solve. Segment frames are built
 // from the hinge axis (X = hinge, Y = bone, Z = X × Y), so every child joint is a pure rotation
