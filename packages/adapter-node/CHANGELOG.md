@@ -1,5 +1,13 @@
 # @vgpu/adapter-node
 
+## 0.6.0
+
+### Patch Changes
+
+- Updated dependencies [7cb11d3]
+- Updated dependencies [333ccf3]
+  - @vgpu/core@0.6.0
+
 ## 0.6.0-rc.2
 
 ### Patch Changes
