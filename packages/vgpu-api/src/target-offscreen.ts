@@ -48,6 +48,8 @@ export class OffscreenTarget implements Target {
     validateTargetOptions(options, device);
     this.options = Object.freeze({ ...options, size: Object.freeze([...options.size]) as readonly [number, number],
       ...(options.colors ? { colors: Object.freeze(options.colors.map((color) => Object.freeze({ ...color }))) } : {}),
+      // Snapshot valid arrays; core texture validation diagnoses malformed runtime values.
+      ...(Array.isArray(options.viewFormats) ? { viewFormats: Object.freeze([...options.viewFormats]) } : {}),
     });
     this.#clearColor = options.clearColor === undefined ? BUILT_IN_CLEAR_COLOR : validateClearColor(options.clearColor, "target.clearColor");
     this.#currentSize = this.options.size;
@@ -142,6 +144,7 @@ export class OffscreenTarget implements Target {
       kind: "2d",
       size,
       format: spec.format,
+      viewFormats: this.options.viewFormats,
       usage: ["render_attachment", "texture_binding", "copy_src"],
       sampleCount: 1,
       label: this.options.label ? `${this.options.label}.color${index}.resolve` : undefined,

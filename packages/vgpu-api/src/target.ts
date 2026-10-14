@@ -3,6 +3,8 @@ import type { Texture, ResourceDestroyCallback, ResourceIdentity, UnsubscribeRes
 
 export interface TargetTextureOptions {
   readonly format?: GPUTextureFormat;
+  /** Compatible view formats for resolved color textures; omitted from MSAA and depth attachments. */
+  readonly viewFormats?: readonly GPUTextureFormat[];
   /**
    * Default clear color of this target, used by passes that clear without naming a color.
    * Defaults to `[0, 0, 0, 1]`; mutable at runtime through `target.clearColor`.

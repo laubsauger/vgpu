@@ -16,6 +16,7 @@ import type { ResourceDestroyCallback, ResourceIdentity, Texture, UnsubscribeRes
 
 interface TargetTextureOptions {
   readonly format?: GPUTextureFormat;
+  readonly viewFormats?: readonly GPUTextureFormat[];
   readonly colors?: readonly { readonly format: GPUTextureFormat }[];
   readonly depth?: boolean | GPUTextureFormat;
   readonly msaa?: boolean | 4;
@@ -58,6 +59,7 @@ interface PingPongStorage { readonly read: import("vgpu").StorageBuffer; readonl
 | target.opts | `TargetOptions` | ✔ | — | Creates an offscreen target. `size` is mandatory. |
 | opts.size | `readonly [number, number]` | ✔ | — | Initial offscreen texture size in physical pixels. |
 | opts.format | `GPUTextureFormat` | ✖ | `"rgba8unorm"` | Used for single-color targets when `colors` is omitted. |
+| opts.viewFormats | `readonly GPUTextureFormat[]` | ✖ | omitted | Compatible alternate views for resolved `.color(s)`, such as `"rgba8unorm-srgb"` for an `"rgba8unorm"` target. The list is copied at creation and reused on resize; it does not change the attachment format or apply to MSAA/depth textures. For MRT, the same list must be compatible with every color format. |
 | opts.colors | `readonly { format: GPUTextureFormat }[]` | ✖ | `[{ format: opts.format ?? "rgba8unorm" }]` | Multiple render targets (MRT): one attachment per entry, all written by one pass — the G-buffer layout for deferred shading. `target.color` is `colors[0]`. |
 | opts.depth | `boolean \| GPUTextureFormat` | ✖ | `undefined` | `true` means `"depth24plus"`; a string uses that depth format; omitted means no depth. The depth texture also has `texture_binding` usage, so later passes can sample it. Combined depth-stencil formats such as `"depth24plus-stencil8"` are supported; stencil-only `"stencil8"` is rejected. |
 | opts.msaa | `boolean \| 4` | ✖ | `false` / sample count `1` | Only `true` or `4` enables MSAA, creating color/depth attachments with sample count `4` and resolving to sampleable `.color(s)`. |
@@ -77,7 +79,7 @@ interface PingPongStorage { readonly read: import("vgpu").StorageBuffer; readonl
 
 **Returns:** `target(gpu)` returns `Target`; `resize()` returns `void`; `renderPassDescriptor(opts?)` returns a WebGPU render pass descriptor; `pingPong(gpu)` returns `PingPongTargets`; `pingPongStorage(gpu)` returns `PingPongStorage`. For readback, select `.color` or `.colors[index]` and use `Texture.read(options)` / `Texture.readFloats(options)`.
 
-**Throws:** `VGPU-CORE-UNSUPPORTED-FORMAT` when `read()` / `readFloats()` runs on a color format outside the readback table (see `Texture`); `VGPU-TARGET-SIZE-REQUIRED` when runtime JS calls `target(gpu)` without `size`; `VGPU-R1-BINDING-INCOMPATIBLE-RESOURCE` when a `texture_depth_*` binding receives a target without a depth attachment; `VGPU-TARGET-MSAA-INVALID` when runtime JS passes an unsupported `msaa` value (only `true` / `4` are accepted); `VGPU-TARGET-DEPTH-STENCIL-ONLY` when `depth` receives the stencil-only `"stencil8"` format (stencil-only depth targets are not supported yet); `VGPU-RING1-UNSUPPORTED` when `msaa: true` / `4` with `rgba16float` is used on a Dawn compatibility-mode device; underlying core texture/readback operations can throw native WebGPU validation errors.
+**Throws:** `VGPU-CORE-UNSUPPORTED-FORMAT` when `read()` / `readFloats()` runs on a color format outside the readback table (see `Texture`); `VGPU-TARGET-SIZE-REQUIRED` when runtime JS calls `target(gpu)` without `size`; `VGPU-R1-BINDING-INCOMPATIBLE-RESOURCE` when a `texture_depth_*` binding receives a target without a depth attachment; `VGPU-TARGET-MSAA-INVALID` when runtime JS passes an unsupported `msaa` value (only `true` / `4` are accepted); `VGPU-TARGET-DEPTH-STENCIL-ONLY` when `depth` receives the stencil-only `"stencil8"` format (stencil-only depth targets are not supported yet); `VGPU-RING1-UNSUPPORTED` when `msaa: true` / `4` with `rgba16float` is used on a Dawn compatibility-mode device; `VGPU-TEXTURE-VIEW-FORMAT` when `viewFormats` is malformed or contains a format incompatible with any resolved color texture, including a mixed-format MRT target; underlying core texture/readback operations can throw native WebGPU validation errors.
 
 ## Examples
 
