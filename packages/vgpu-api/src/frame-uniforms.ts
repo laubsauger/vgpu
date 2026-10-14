@@ -12,6 +12,8 @@ interface Page {
   used: number;
   /** Bind-group clock when the current owner frame took the page. */
   taken: number;
+  /** Bind-group clock when the owner frame before that took it (0 for a new page). */
+  previouslyTaken: number;
   /** Caches holding bind groups of this page's ranges. */
   readonly caches: Set<BindGroupCache>;
   /** Range descriptors by offset, reused across frames so identities (and their cache keys) stay stable. */
@@ -65,8 +67,10 @@ export class FrameUniforms implements UniformCapture {
     const pool = disposed.has(this.device) ? undefined : pools.get(this.device);
     for (const page of this.#pages) {
       if (pool && pool.pages.length < MAX_RETAINED_UNIFORM_PAGES && pool.bytes + page.bytes.byteLength <= MAX_RETAINED_UNIFORM_BYTES) {
-        // Bind groups this frame did not use belong to draws that moved or stopped drawing.
-        for (const cache of page.caches) cache.evictIdentity(pageIdentity(page), page.taken);
+        // Bind groups neither this frame nor the page's previous frame used belong to draws that
+        // moved or stopped drawing. One frame is not enough: a consumer bound to a ping-pong
+        // alternates between two bind groups, so each frame would evict the one the next needs.
+        for (const cache of page.caches) cache.evictIdentity(pageIdentity(page), page.previouslyTaken);
         pool.pages.push(page);
         pool.bytes += page.bytes.byteLength;
       } else destroyPage(page);
@@ -102,6 +106,7 @@ export class FrameUniforms implements UniformCapture {
     const page = index >= 0 ? pool!.pages.splice(index, 1)[0]! : this.#createPage(minimum);
     if (index >= 0) pool!.bytes -= page.bytes.byteLength;
     page.used = 0;
+    page.previouslyTaken = page.taken;
     page.taken = bindGroupClock();
     return page;
   }
@@ -109,7 +114,7 @@ export class FrameUniforms implements UniformCapture {
   #createPage(minimum: number): Page {
     const size = Math.min(this.device.limits.maxBufferSize, Math.max(65536, Math.ceil(minimum / 4) * 4));
     const buffer = this.device.gpu.createBuffer({ label: "vgpu.frame.uniforms", size, usage: 0x40 | 0x08 });
-    return { id: nextPage++, buffer, bytes: new Uint8Array(size), used: 0, taken: 0, caches: new Set(), ranges: new Map() };
+    return { id: nextPage++, buffer, bytes: new Uint8Array(size), used: 0, taken: 0, previouslyTaken: 0, caches: new Set(), ranges: new Map() };
   }
 }
 
