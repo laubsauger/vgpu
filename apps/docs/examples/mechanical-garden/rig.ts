@@ -21,7 +21,7 @@ export const PART_MESHES = ["shell", "payload", "hipRight", "hipLeft", "femurRig
 export type PartMesh = (typeof PART_MESHES)[number];
 /**
  * Right legs are 0 and 1, left legs 2 and 3 (see LEG_SPECS). Hips and femurs have a mesh per side
- * (the yellow cover faces outward; the left meshes are mirrored geometry, never mirrored frames).
+ * (the accent caps face outward; the left meshes are mirrored geometry, never mirrored frames).
  */
 const RIGHT_LEGS = LEG_SPECS.filter((spec) => spec.side === 1).length;
 const LEFT_LEGS = LEG_COUNT - RIGHT_LEGS;
@@ -41,7 +41,7 @@ export const ROWS_PER_ROBOT = PART_MESHES.reduce((sum, mesh) => sum + PER_ROBOT[
 /** Payload mount on the chassis top, body space. */
 export const PAYLOAD_OFFSET: Vec3 = [0, 0.086, -0.04];
 
-/** Per-instance style: x variant (1 carries the payload), y glow (status LED), z part, w unused. */
+/** Per-instance style: x variant (1 carries the payload), y glow (LED eyes), z part, w unused. */
 export const PART_ATTRIBUTES = { style: { format: "float32x4", default: [0, 0, 0, 0] } } as const;
 export type PartCollection = InstanceCollection<typeof PART_ATTRIBUTES>;
 
@@ -231,7 +231,7 @@ export function publishRig(rig: Rig, robots: readonly Robot[], count: number): v
     if (rig.styles[index] === variant) continue;
     rig.styles[index] = variant;
     style[0] = variant;
-    // The status LED on the sensor face glows on payload carriers.
+    // The LED eyes glow brighter on payload carriers.
     style[1] = variant;
     for (const mesh of PART_MESHES) {
       if (mesh === "payload") continue;

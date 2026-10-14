@@ -42,8 +42,8 @@ function openEdges(uses: Map<string, number>): number {
 describe("part meshes", () => {
   const meshes = buildPartMeshes();
 
-  it("closes the pale top plate: no slit along its seam column or at its poles", () => {
-    const uses = weldedEdgeUse(meshes.shell, MATERIAL.panel);
+  it("closes the accent spine ridge: no slit along its seam column or at its poles", () => {
+    const uses = weldedEdgeUse(meshes.shell, MATERIAL.accent);
     expect(uses.size).toBeGreaterThan(100);
     expect(openEdges(uses)).toBe(0);
   });
