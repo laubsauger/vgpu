@@ -1,8 +1,8 @@
 // Procedural meshes, built once on the CPU. Every part mesh is one merged vertex buffer whose
-// vertices carry a material code, so a robot part (a yellow cover over a black frame with a metal
+// vertices carry a material code, so a robot part (a light shell over a slate frame with a metal
 // actuator) is a single instanced draw. Leg segments run along +Y from the joint at 0 to the next
 // joint at the bone length, matching the rig locals; the hinge axis is local +X. Body space is +Z
-// forward, +Y up, +X to the robot's right. Right-side hips and femurs face their cover toward +X;
+// forward, +Y up, +X to the robot's right. Right-side hips and femurs face their accent caps toward +X;
 // the left meshes are the same geometry mirrored in X.
 //
 // Vertex layout (shared with the terrain): position (3), normal (3), material (1) floats.
@@ -15,8 +15,8 @@ export const MESH_VERTEX_FLOATS = 7;
 
 /** Material codes; keep in sync with the MATERIAL_* constants in common.wgsl. */
 export const MATERIAL = {
-  yellow: 0,
-  panel: 1,
+  cover: 0,
+  accent: 1,
   graphite: 2,
   lens: 3,
   led: 4,
@@ -268,102 +268,89 @@ const mix = (a: number, b: number, t: number) => a + (b - a) * t;
 
 export type PartMeshes = Record<"shell" | "payload" | "hipRight" | "hipLeft" | "femurRight" | "femurLeft" | "tibia" | "foot", MeshData>;
 
-/** Chassis half extents, body space (the shell is centred on the body origin). */
-export const CHASSIS: V3 = [0.125, 0.072, 0.4];
+/** Torso half extents, body space (the torso is centred a little behind the body origin). */
+export const CHASSIS: V3 = [0.118, 0.07, 0.32];
+const TORSO_Z = -0.04;
 
 export function buildPartMeshes(): PartMeshes {
-  const { yellow, panel, graphite, lens, led, rubber, metal } = MATERIAL;
+  const { cover, accent, graphite, lens, led, rubber, metal } = MATERIAL;
   const [cx, cy, cz] = CHASSIS;
-  // Chassis: a long yellow box with chamfered edges over a black belly, a pale top plate, a black
-  // side stripe, and the sensor heads front, sides and rear.
+  // Torso: a soft, pill-shaped light shell over a slate keel, with an accent spine ridge on top, a
+  // vented flank panel each side, and a rounded head pod on a short neck at the front.
   const shell = new Builder()
-    .rounded(at([0, 0, 0]), [cx, cy, cz], 0.2, yellow, 36, 20)
-    .rounded(at([0, -0.045, 0]), [cx - 0.007, 0.042, cz - 0.035], 0.3, graphite, 28, 14)
-    .rounded(at([0, cy - 0.001, -0.01]), [cx - 0.017, 0.011, cz - 0.06], 0.15, panel, 28, 10);
+    .rounded(at([0, 0, TORSO_Z]), [cx, cy, cz], 0.55, cover, 36, 20)
+    .rounded(at([0, -0.04, TORSO_Z]), [cx - 0.012, 0.045, cz - 0.03], 0.45, graphite, 28, 14)
+    .rounded(at([0, cy - 0.004, TORSO_Z - 0.02]), [0.026, 0.014, cz - 0.08], 0.35, accent, 20, 10);
   for (const side of [-1, 1]) {
-    shell.rounded(at([side * (cx - 0.001), -0.014, -0.03]), [0.005, 0.011, 0.27], 0.3, graphite, 12, 8);
-    // Side stereo head near the front.
-    shell.rounded(at([side * (cx - 0.001), 0.028, 0.27]), [0.005, 0.016, 0.05], 0.25, graphite, 14, 8);
-    for (const z of [0.25, 0.29]) shell.ellipsoid(at([side * (cx + 0.004), 0.028, z]), [0.003, 0.007, 0.007], lens, 10, 6);
-    for (const z of [0.3, 0, -0.3]) shell.ellipsoid(at([side * (cx - 0.024), cy + 0.012, z]), [0.005, 0.004, 0.005], graphite, 8, 5);
+    // Flank panel with three vent slots, and a round service hatch behind it.
+    shell.rounded(at([side * (cx - 0.004), 0.004, TORSO_Z + 0.02]), [0.01, 0.03, 0.12], 0.3, graphite, 14, 8);
+    for (const z of [-0.04, 0.02, 0.08]) shell.rounded(at([side * (cx + 0.005), 0.004, TORSO_Z + z]), [0.003, 0.018, 0.008], 0.3, accent, 8, 6);
+    shell.tube(across([side > 0 ? cx - 0.02 : -cx - 0.002, 0.006, TORSO_Z - 0.2]), 0, 0.022, 0.02, 0.02, graphite, 16);
   }
-  // Front sensor face: a black inset in the yellow frame, a stereo lens column each side, a grille
-  // between them, and a vertical status LED (lit on payload robots).
-  shell.rounded(at([0, 0.002, cz - 0.002]), [cx - 0.025, 0.05, 0.012], 0.2, graphite, 24, 10);
-  for (const side of [-1, 1]) {
-    for (const y of [0.03, 0.01, -0.01, -0.03]) shell.ellipsoid(at([side * 0.062, y, cz + 0.009]), [0.008, 0.0065, 0.004], lens, 12, 6);
-  }
-  for (let k = 0; k < 6; k++) shell.rounded(at([0, -0.03 + k * 0.012, cz + 0.009]), [0.034, 0.0022, 0.003], 0.4, metal, 10, 4);
-  shell.rounded(at([0.088, 0.002, cz + 0.008]), [0.0035, 0.03, 0.004], 0.4, led, 8, 8);
-  // Rear sensor face.
-  shell.rounded(at([0, 0.004, -cz + 0.002]), [cx - 0.035, 0.042, 0.012], 0.2, graphite, 24, 10);
-  for (const side of [-1, 1]) shell.ellipsoid(at([side * 0.045, 0.006, -cz - 0.009]), [0.008, 0.0065, 0.004], lens, 12, 6);
+  // Neck collar and head pod: a wraparound dark visor with two LED eyes (brighter on payload robots)
+  // and a slate chin.
+  shell
+    .tube(forward([0, 0.026, TORSO_Z + cz - 0.06]), 0, 0.12, 0.05, 0.044, graphite, 22)
+    .rounded(at([0, 0.046, 0.372]), [0.084, 0.058, 0.076], 0.7, cover, 28, 16)
+    .rounded(at([0, 0.054, 0.4]), [0.077, 0.023, 0.052], 0.55, lens, 24, 10)
+    .rounded(at([0, 0.0, 0.392]), [0.058, 0.016, 0.05], 0.6, graphite, 18, 8);
+  for (const side of [-1, 1]) shell.ellipsoid(at([side * 0.032, 0.055, 0.449]), [0.012, 0.0075, 0.006], led, 12, 6);
+  // Tail: a slate cap with an accent ring and a rear lens.
+  shell
+    .tube(forward([0, 0.002, TORSO_Z - cz - 0.004]), 0, 0.03, 0.04, 0.05, graphite, 20)
+    .tube(forward([0, 0.002, TORSO_Z - cz + 0.018]), 0, 0.012, 0.053, 0.053, accent, 20)
+    .ellipsoid(at([0, 0.002, TORSO_Z - cz - 0.006]), [0.014, 0.014, 0.006], lens, 12, 6);
 
-  // Payload (Field AI): a low black box on the top plate, corner cameras, and a lidar mast at the
-  // front with a silver ring and a slim mast on top. Origin on the top plate (rig PAYLOAD_OFFSET).
-  const payload = new Builder().rounded(at([0, 0.028, 0]), [0.1, 0.028, 0.27], 0.15, graphite, 28, 12);
-  for (const side of [-1, 1]) payload.rounded(at([side * 0.07, 0.058, 0.255]), [0.024, 0.011, 0.02], 0.3, metal, 12, 6);
+  // Payload: a slim cargo deck with side rails, a dome antenna housing at the back, a gimbal camera
+  // at the front and a whip antenna with a lit tip. Origin on the spine ridge (rig PAYLOAD_OFFSET).
+  const payload = new Builder().rounded(at([0, 0.016, 0]), [0.094, 0.016, 0.24], 0.25, graphite, 28, 10);
+  for (const side of [-1, 1]) payload.tube(forward([side * 0.088, 0.036, -0.22]), 0, 0.44, 0.007, 0.007, metal, 10);
   payload
-    .tube(at([0, 0, 0.2]), 0.05, 0.09, 0.022, 0.022, graphite, 14)
-    .tube(at([0, 0, 0.2]), 0.09, 0.155, 0.042, 0.04, graphite, 24)
-    .tube(at([0, 0, 0.2]), 0.104, 0.13, 0.045, 0.045, metal, 24)
-    .tube(at([0, 0, 0.2]), 0.155, 0.168, 0.03, 0.026, graphite, 18)
-    .tube(at([0, 0, 0.2]), 0.168, 0.29, 0.011, 0.01, graphite, 10)
-    .ellipsoid(at([0, 0.245, 0.2105]), [0.004, 0.006, 0.003], led, 8, 6);
+    .tube(at([0, 0, -0.12]), 0.03, 0.05, 0.068, 0.068, accent, 28)
+    .ellipsoid(at([0, 0.05, -0.12]), [0.064, 0.05, 0.064], cover, 28, 14)
+    .tube(at([0, 0, 0.17]), 0.03, 0.07, 0.012, 0.012, metal, 10)
+    .ellipsoid(at([0, 0.088, 0.17]), [0.03, 0.03, 0.03], graphite, 20, 12)
+    .ellipsoid(at([0, 0.088, 0.196]), [0.014, 0.014, 0.008], lens, 12, 6)
+    .tube(at([-0.06, 0, -0.2]), 0.03, 0.22, 0.004, 0.003, graphite, 8)
+    .ellipsoid(at([-0.06, 0.224, -0.2]), [0.007, 0.007, 0.007], led, 10, 6);
 
-  // Hip (right): the black roll actuator along Z at the pivot and the pitch actuator out along X to
-  // the femur hinge.
+  // Hip (right): a slate roll housing at the pivot and the pitch motor out along X to the femur
+  // hinge, banded in the accent colour.
   const hip = new Builder()
-    .tube(forward([0, 0, -0.06]), 0, 0.12, 0.042, 0.042, graphite, 20)
-    .tube(across([0, 0, 0]), 0.02, HIP_OFFSET - 0.03, 0.047, 0.047, metal, 22)
-    .tube(across([0, 0, 0]), HIP_OFFSET - 0.034, HIP_OFFSET - 0.026, 0.051, 0.051, graphite, 22);
+    .rounded(at([0.01, 0, 0]), [0.046, 0.046, 0.06], 0.6, graphite, 22, 12)
+    .tube(across([0, 0, 0]), 0.02, HIP_OFFSET - 0.03, 0.044, 0.044, metal, 22)
+    .tube(across([0, 0, 0]), HIP_OFFSET - 0.036, HIP_OFFSET - 0.026, 0.049, 0.049, accent, 22);
 
-  // Femur (right): a thick, tapering yellow cover on the outer face over a black frame on the
-  // inner face, a rounded shoulder over the pitch actuator, and a knee pin.
+  // Femur (right): a slate hub over the pitch motor with an accent cap, a straight round strut in
+  // the light shell, a metal push rod down its back to the knee, and a knee hub with an accent cap.
   const femur = new Builder()
-    .tube(across([-0.03, 0, 0]), 0, 0.06, 0.046, 0.046, graphite, 22)
-    .rounded(at([0.014, 0.025, 0.006]), [0.03, 0.068, 0.058], 0.6, yellow, 22, 12)
+    .tube(across([-0.03, 0, 0]), 0, 0.06, 0.042, 0.042, graphite, 22)
+    .tube(across([0.03, 0, 0]), 0, 0.008, 0.038, 0.032, accent, 22)
     .sweep(
       AXES,
-      stations(7, (t) => ({ x: 0.009, y: mix(0.03, FEMUR - 0.015, t), z: 0.008 + 0.012 * Math.sin(Math.PI * t), rx: mix(0.031, 0.021, t), rz: mix(0.054, 0.026, t) })),
-      yellow,
-      20,
+      stations(6, (t) => ({ x: 0.004, y: mix(0.03, FEMUR - 0.025, t), z: 0.004, rx: mix(0.025, 0.019, t), rz: mix(0.034, 0.024, t) })),
+      cover,
+      18,
     )
-    .sweep(
-      AXES,
-      stations(5, (t) => ({ x: -0.011, y: mix(0.02, FEMUR - 0.01, t), z: -0.006, rx: mix(0.025, 0.017, t), rz: mix(0.046, 0.024, t) })),
-      graphite,
-      16,
-    )
-    .tube(across([-0.027, FEMUR, 0]), 0, 0.054, 0.024, 0.024, graphite, 16)
-    .tube(across([0.027, FEMUR, 0]), 0, 0.006, 0.011, 0.011, metal, 12);
+    .tube(at([-0.004, 0, -0.036]), 0.02, FEMUR - 0.03, 0.0065, 0.0065, metal, 10)
+    .tube(across([-0.026, FEMUR, 0]), 0, 0.052, 0.026, 0.026, graphite, 18)
+    .tube(across([0.026, FEMUR, 0]), 0, 0.006, 0.019, 0.015, accent, 16);
 
-  // Tibia: a black knee block and a flat, slightly bowed blade, deep at the knee and narrowing to
-  // the ankle, which flares into the foot cuff.
+  // Tibia: a slate knee block and a straight, tapering light-shell shin with an accent ankle collar
+  // over a slate ankle.
   const tibia = new Builder()
-    .rounded(at([0, 0.022, -0.004]), [0.024, 0.044, 0.038], 0.5, graphite, 18, 10)
+    .rounded(at([0, 0.02, -0.004]), [0.022, 0.04, 0.03], 0.55, graphite, 18, 10)
     .sweep(
       AXES,
-      stations(9, (t) => ({ x: 0, y: mix(0.02, TIBIA - FOOT_RADIUS * 0.9, t), z: -0.016 * Math.sin(Math.PI * t), rx: mix(0.019, 0.012, t), rz: mix(0.04, 0.013, t) })),
-      graphite,
+      stations(5, (t) => ({ x: 0, y: mix(0.04, TIBIA - FOOT_RADIUS * 1.6, t), z: 0, rx: mix(0.018, 0.0125, t), rz: mix(0.022, 0.0135, t) })),
+      cover,
       16,
     )
-    .tube(AXES, TIBIA - FOOT_RADIUS * 1.7, TIBIA - FOOT_RADIUS * 0.4, 0.012, 0.02, graphite, 14);
+    .tube(AXES, TIBIA - FOOT_RADIUS * 1.75, TIBIA - FOOT_RADIUS * 1.35, 0.0155, 0.0155, accent, 14)
+    .tube(AXES, TIBIA - FOOT_RADIUS * 1.4, TIBIA - FOOT_RADIUS * 0.4, 0.012, 0.016, graphite, 14);
 
-  // Foot: a ribbed rubber drum across the hinge whose tread touches the ground one FOOT_RADIUS below
-  // the foot point (the ankle pin at its centre).
-  const half = FOOT_RADIUS * 0.85;
-  const foot = new Builder().sweep(
-    across([0, 0, 0]),
-    stations(13, (t) => {
-      const edge = Math.abs(t * 2 - 1);
-      const rib = 1 - 0.07 * Math.max(0, Math.cos(t * Math.PI * 8)) ** 2;
-      const radius = FOOT_RADIUS * (1 - 0.3 * edge ** 6) * rib;
-      return { x: 0, y: mix(-half, half, t), z: 0, rx: radius, rz: radius };
-    }),
-    rubber,
-    24,
-  );
+  // Foot: a rubber ball whose bottom touches the ground one FOOT_RADIUS below the foot point.
+  const foot = new Builder().ellipsoid(AXES, [FOOT_RADIUS, FOOT_RADIUS, FOOT_RADIUS], rubber, 20, 12);
 
   const hipMesh = hip.build();
   const femurMesh = femur.build();
