@@ -60,19 +60,19 @@ fn surfaceFor(input: PartVarying) -> Surface {
   // Case values are the MATERIAL codes in common.wgsl / meshes.ts (the linker keeps only consts
   // referenced from expressions, so the selectors are literals).
   switch input.material {
-    case 0u: { // MATERIAL_YELLOW: glossy safety-yellow plastic covers
-      surface.albedo = vec3f(0.86, 0.47, 0.006);
+    case 0u: { // MATERIAL_COVER: glossy off-white shell plastic
+      surface.albedo = vec3f(0.6, 0.6, 0.58);
       surface.shininess = 70.0;
       surface.specular = vec3f(0.05);
     }
-    case 1u: { // MATERIAL_PANEL: the pale, barely warm satin top plate over the yellow chassis
-      surface.albedo = vec3f(0.4, 0.39, 0.35);
-      surface.shininess = 40.0;
-      surface.specular = vec3f(0.06);
+    case 1u: { // MATERIAL_ACCENT: satin coral trim on the spine, caps and collars
+      surface.albedo = vec3f(0.78, 0.13, 0.035);
+      surface.shininess = 45.0;
+      surface.specular = vec3f(0.05);
     }
-    case 2u: { // MATERIAL_GRAPHITE: black frame plastic with a faint moulded grain
+    case 2u: { // MATERIAL_GRAPHITE: slate frame plastic with a faint moulded grain
       let grain = speckle(input.localPosition, 260.0);
-      surface.albedo = vec3f(0.022, 0.023, 0.025) * (0.85 + 0.3 * grain);
+      surface.albedo = vec3f(0.03, 0.036, 0.045) * (0.85 + 0.3 * grain);
       surface.shininess = 36.0;
       surface.specular = vec3f(0.05);
     }
@@ -81,19 +81,19 @@ fn surfaceFor(input: PartVarying) -> Surface {
       surface.specular = vec3f(0.12);
       surface.shininess = 220.0;
     }
-    case 4u: { // MATERIAL_LED: a green status strip, lit by the instance glow
+    case 4u: { // MATERIAL_LED: cyan eyes and antenna tip, brightened by the instance glow
       let glow = input.style.y;
-      surface.albedo = vec3f(0.01, 0.03, 0.012);
+      surface.albedo = vec3f(0.01, 0.025, 0.03);
       surface.specular = vec3f(0.08);
       surface.shininess = 120.0;
-      surface.emission = vec3f(0.25, 2.4, 0.45) * glow;
+      surface.emission = vec3f(0.2, 1.6, 2.4) * (0.3 + 0.7 * glow);
     }
     case 5u: { // MATERIAL_RUBBER
       surface.albedo = vec3f(0.032, 0.032, 0.033);
       surface.shininess = 10.0;
       surface.specular = vec3f(0.03);
     }
-    case 6u: { // MATERIAL_METAL: brushed actuator housings and the lidar ring
+    case 6u: { // MATERIAL_METAL: brushed actuator housings, push rods and rails
       surface.albedo = vec3f(0.05, 0.052, 0.056);
       surface.specular = vec3f(0.55, 0.56, 0.58);
       surface.shininess = 55.0;
