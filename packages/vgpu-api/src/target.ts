@@ -11,6 +11,8 @@ export interface TargetTextureOptions {
   readonly colors?: readonly { readonly format: GPUTextureFormat }[];
   readonly depth?: boolean | GPUTextureFormat;
   readonly msaa?: boolean | 4;
+  /** Store multisample color/depth/stencil attachments across passes; requires MSAA. */
+  readonly preserveSamples?: boolean;
   readonly label?: string;
 }
 
@@ -49,6 +51,8 @@ export interface Target {
   readonly depth?: Texture;
   readonly format: GPUTextureFormat;
   readonly sampleCount: 1 | 4;
+  /** Whether multisample attachments survive a pass; unsupported targets and surfaces omit it. */
+  readonly preserveSamples?: boolean;
   /**
    * Default clear color of this target: the color a pass uses when it clears without naming one
    * (`pass(target, body)` or `clear: true`). Writable at runtime, validated on assignment.

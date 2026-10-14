@@ -1,4 +1,4 @@
-import { clearColorInvalidError, targetSizeRequiredError, targetStencilOnlyDepthError, unsupportedError } from "./errors.ts";
+import { clearColorInvalidError, targetSizeRequiredError, targetStencilOnlyDepthError, unsupportedError, VGPUError } from "./errors.ts";
 import type { Target, TargetOptions, TargetTextureOptions } from "./target.ts";
 
 export const DEFAULT_FORMAT: GPUTextureFormat = "rgba8unorm";
@@ -48,10 +48,17 @@ export function sampleCountFor(options: TargetTextureOptions): 1 | 4 {
 
 export function validateTargetOptions(options: Partial<TargetOptions> | undefined, caps: TargetDeviceCaps): void {
   if (!Array.isArray(options?.size) || options.size.length !== 2 || !Array.from(options.size).every(value => Number.isSafeInteger(value) && value > 0)) throw targetSizeRequiredError();
+  if (options.preserveSamples !== undefined && typeof options.preserveSamples !== "boolean") {
+    throw new VGPUError({ code: "VGPU-TARGET-PRESERVE-SAMPLES", message: "preserveSamples must be a boolean.", where: "target", fix: "Pass preserveSamples: true for an MSAA target, or omit the option." });
+  }
+  const samples = sampleCountFor(options);
+  if (options.preserveSamples === true && samples !== 4) {
+    throw new VGPUError({ code: "VGPU-TARGET-PRESERVE-SAMPLES", message: "preserveSamples requires an MSAA target.", where: "target", fix: "Add msaa: true or msaa: 4, or omit preserveSamples." });
+  }
   const depthFormat = depthFormatFor(options);
   // Stencil-only formats have no depth aspect, so the default depth state (depthWriteEnabled: true) cannot compile against them.
   if (depthFormat === "stencil8") throw targetStencilOnlyDepthError(depthFormat);
-  if (sampleCountFor(options) !== 4) return;
+  if (samples !== 4) return;
   for (const spec of colorSpecsFor(options)) validateMsaaFormat(spec.format, caps);
 }
 
@@ -64,18 +71,18 @@ function validateMsaaFormat(format: GPUTextureFormat, caps: TargetDeviceCaps): v
   );
 }
 
-export function colorAttachment(resolved: { createView(): GPUTextureView }, msaa: { createView(): GPUTextureView } | undefined, clear: ClearColor, preserve?: boolean): GPURenderPassColorAttachment {
+export function colorAttachment(resolved: { createView(): GPUTextureView }, msaa: { createView(): GPUTextureView } | undefined, clear: ClearColor, preserve?: boolean, preserveSamples?: boolean): GPURenderPassColorAttachment {
   const attachment: GPURenderPassColorAttachment = {
     view: (msaa ?? resolved).createView(),
     resolveTarget: msaa ? resolved.createView() : undefined,
     loadOp: preserve ? "load" : "clear",
-    storeOp: msaa ? "discard" : "store",
+    storeOp: msaa && preserveSamples !== true ? "discard" : "store",
   };
   if (!preserve) attachment.clearValue = colorValue(clear);
   return attachment;
 }
 
-export function depthAttachment(depth: { createView(): GPUTextureView; readonly sampleCount?: number; readonly format?: GPUTextureFormat }, preserve?: boolean, clearDepth?: number, clearStencil?: number, readOnly?: boolean): GPURenderPassDepthStencilAttachment {
+export function depthAttachment(depth: { createView(): GPUTextureView; readonly sampleCount?: number; readonly format?: GPUTextureFormat }, preserve?: boolean, clearDepth?: number, clearStencil?: number, readOnly?: boolean, preserveSamples?: boolean): GPURenderPassDepthStencilAttachment {
   if (readOnly) {
     // WebGPU requires the ops to be OMITTED for read-only aspects: "If format has a depth aspect and
     // this.depthReadOnly is false: this.depthLoadOp must be provided. this.depthStoreOp must be provided.
@@ -85,12 +92,13 @@ export function depthAttachment(depth: { createView(): GPUTextureView; readonly 
     if (hasStencilAspect(depth.format)) attachment.stencilReadOnly = true;
     return attachment;
   }
-  const attachment: GPURenderPassDepthStencilAttachment = { view: depth.createView(), depthLoadOp: preserve ? "load" : "clear", depthStoreOp: depth.sampleCount! > 1 ? "discard" : "store" };
+  const discardSamples = depth.sampleCount! > 1 && preserveSamples !== true;
+  const attachment: GPURenderPassDepthStencilAttachment = { view: depth.createView(), depthLoadOp: preserve ? "load" : "clear", depthStoreOp: discardSamples ? "discard" : "store" };
   if (!preserve) attachment.depthClearValue = clearDepth ?? 1;
   // WebGPU requires stencilLoadOp/stencilStoreOp whenever the format has a stencil aspect and stencilReadOnly is not set.
   if (depth.format && hasStencilAspect(depth.format)) {
     attachment.stencilLoadOp = preserve ? "load" : "clear";
-    attachment.stencilStoreOp = depth.sampleCount! > 1 ? "discard" : "store";
+    attachment.stencilStoreOp = discardSamples ? "discard" : "store";
     if (!preserve) attachment.stencilClearValue = clearStencil ?? 0;
   }
   return attachment;

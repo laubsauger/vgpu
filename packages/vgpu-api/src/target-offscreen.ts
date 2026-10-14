@@ -67,6 +67,7 @@ export class OffscreenTarget implements Target {
   get clearColor(): ClearColor { return copyClearColor(this.#clearColor); }
   set clearColor(value: ClearColor) { this.#clearColor = validateClearColor(value, "target.clearColor"); }
   get sampleCount(): 1 | 4 { return sampleCountFor(this.options); }
+  get preserveSamples(): boolean { return this.options.preserveSamples === true; }
 
   resize(size: readonly [number, number]): void {
     this.#assertAlive("Target.resize");
@@ -101,8 +102,8 @@ export class OffscreenTarget implements Target {
     this.#assertAlive("Target.renderPassDescriptor");
     const { clear = [0, 0, 0, 1], preserve, clearDepth, clearStencil, depthReadOnly } = opts;
     return {
-      colorAttachments: this.colors.map((resolved, index) => colorAttachment(resolved, this.#attachments.msaaColors?.[index], clear, preserve)),
-      depthStencilAttachment: this.depth ? depthAttachment(this.depth, preserve, clearDepth, clearStencil, depthReadOnly) : undefined,
+      colorAttachments: this.colors.map((resolved, index) => colorAttachment(resolved, this.#attachments.msaaColors?.[index], clear, preserve, this.preserveSamples)),
+      depthStencilAttachment: this.depth ? depthAttachment(this.depth, preserve, clearDepth, clearStencil, depthReadOnly, this.preserveSamples) : undefined,
     };
   }
 

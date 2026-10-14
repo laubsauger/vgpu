@@ -243,7 +243,7 @@ export class Frame {
     if (isSurface(resolvedTarget) && this.#submitted) throw surfaceNotInFrameError("Frame.pass");
     const clear = targetOnly ? undefined : target.clear;
     const preserve = clear === false;
-    if (preserve && resolvedTarget.sampleCount === 4) throw passPreserveMsaaError();
+    if (preserve && resolvedTarget.sampleCount === 4 && !("preserveSamples" in resolvedTarget && resolvedTarget.preserveSamples === true)) throw passPreserveMsaaError();
     const clearDepth = targetOnly ? undefined : target.clearDepth;
     if (clearDepth !== undefined) {
       if (typeof clearDepth !== "number" || !(clearDepth >= 0 && clearDepth <= 1)) throw passClearDepthInvalidError(clearDepth);
@@ -274,11 +274,9 @@ export class Frame {
       // pass, so clear (color) stays legal, but the read-only depth/stencil aspects omit their ops entirely
       // and can never be cleared.
       if (!resolvedTarget.depth) throw passDepthReadOnlyError("is set, but the target has no depth attachment, so there is nothing to make read-only.", "Create the target with depth: true (or a depth format), or drop depthReadOnly.");
-      // Symmetric to the clear:false MSAA rule: an MSAA target's depth aspect is stored with
-      // storeOp "discard" (target-utils depthAttachment), so nothing survives the pass that wrote
-      // it. Reading it back read-only would depth-test every draw against discarded contents —
-      // silent garbage (with visibility attached, every query reports "hidden").
-      if (resolvedTarget.sampleCount === 4) throw passDepthReadOnlyMsaaError();
+      // Only opted-in MSAA targets retain depth for later read-only passes; ordinary MSAA
+      // targets and surfaces discard their samples after each pass.
+      if (resolvedTarget.sampleCount === 4 && !("preserveSamples" in resolvedTarget && resolvedTarget.preserveSamples === true)) throw passDepthReadOnlyMsaaError();
       if (clearDepth !== undefined) throw passDepthReadOnlyError("cannot be combined with clearDepth; a read-only depth aspect omits its load/store ops and is never cleared.", "Remove clearDepth, or drop depthReadOnly.");
       if (clearStencil !== undefined) throw passDepthReadOnlyError("cannot be combined with clearStencil; a read-only stencil aspect omits its load/store ops and is never cleared.", "Remove clearStencil, or drop depthReadOnly.");
     }
