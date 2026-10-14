@@ -378,3 +378,30 @@ test("changing draw order and discarded draws keep the cache bounded", async () 
     expect(Math.max(...sizes)).toBeLessThan(40 * 2 * 3);
   } finally { gpu.dispose(); }
 });
+
+test("a consumer alternating between two bind groups frame by frame keeps both", async () => {
+  // A ping-pong reader: its texture swaps halves every frame while its managed uniforms are
+  // captured into the pool's page. Evicting what THIS frame did not use dropped the half the
+  // next frame binds, so the consumer built a bind group on every frame, forever.
+  const gpu = await init();
+  try {
+    const halves = [target(gpu, { size: [2, 2] }), target(gpu, { size: [2, 2] })] as const;
+    const output = target(gpu, { size: [2, 2] });
+    const reader = effect(gpu, prepareShader(`struct Params { value:f32 }
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var history: texture_2d<f32>;
+@fragment fn fs() -> @location(0) vec4f { return textureLoad(history, vec2i(0), 0) * params.value; }`), {
+      set: { params: { value: 1 } },
+    });
+    const created = () => getMockGPUDeviceInstrumentation(gpu.gpu).calls.createBindGroup;
+    const counts: number[] = [];
+    for (let i = 0; i < 24; i++) {
+      reader.set({ history: halves[i % 2]!.color, params: { value: i } });
+      const f = frame(gpu, current => current.pass(output, reader));
+      await f.done;
+      counts.push(created());
+    }
+    // Warm after both halves have been bound once; nothing is built from then on.
+    expect(counts.slice(4)).toEqual(counts.slice(4).map(() => counts[3]));
+  } finally { gpu.dispose(); }
+});
