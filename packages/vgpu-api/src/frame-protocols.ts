@@ -35,10 +35,13 @@ export type FrameHandle = object;
 
 export const FRAME_DRAWABLE: unique symbol = Symbol("vgpu.frame.drawable");
 
+/** State belongs to one internally owned native render pass, never to a draw or frame. */
+export type RenderPassDrawState = [pipeline?: GPURenderPipeline];
+
 export interface FrameDrawableProtocol {
   /** Used by pass-level error messages (read-only depth rejections name the offending draw). */
   readonly label: string;
-  encode(pass: GPURenderPassEncoder, target: Target, opts: DrawCallOptions, claimValidation?: (result: ClaimedGroupValidationResult) => void, capture?: UniformCapture): void;
+  encode(pass: GPURenderPassEncoder, target: Target, opts: DrawCallOptions, claimValidation?: (result: ClaimedGroupValidationResult) => void, capture?: UniformCapture, encodingState?: RenderPassDrawState): void;
   /** True when the drawable's depth state writes depth — rejected by a `depthReadOnly` pass. */
   writesDepth(): boolean;
   /** Names of the stencil ops that can write, empty when none — rejected by a `depthReadOnly` pass on a stencil format. */
